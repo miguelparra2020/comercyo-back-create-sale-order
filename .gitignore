@@ -1,0 +1,82 @@
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs y archivos temporales
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.pid
+*.seed
+
+# Node
+node_modules/
+dist/
+build/
+.npm/
+package-lock.json
+yarn.lock
+.pnpm-store/
+
+# PHP / Composer
+/vendor/
+composer.lock
+*.phpunit.result.cache
+
+# Laravel (si aplica)
+.env
+.env.*.local
+.env.local
+/public/storage
+/storage/*.key
+/storage/framework/cache/data/
+storage/*.log
+/storage/debugbar/*
+/bootstrap/cache/*.php
+
+# Bases de datos locales
+*.sqlite
+*.sqlite3
+
+# Coverage
+coverage/
+coverage-*.xml
+.nyc_output/
+
+# IDEs y editores
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Contenedores / Docker
+*.env.*.local
+docker-compose.override.yml
+.docker/
+
+# Otros artefactos de construcción
+*.tgz
+*.zip
+*.tar.gz
+
+# Certificados y claves
+*.pem
+*.key
+
+src/config/secrets.local.ts
+
+# Archivos de sistema y mac
+Icon?
+ehthumbs.db
+
+# Seguro: ignores adicionales comunes
+*.cache
+*.tmp
+.vercel
+
+# Git worktrees (SDD isolated workspaces)
+.worktrees/

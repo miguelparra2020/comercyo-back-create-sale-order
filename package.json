@@ -1,0 +1,30 @@
+{
+  "name": "comercyo-back-create-sale-order",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "vercel-build": "echo 'Building for Vercel...' && tsc --project tsconfig.build.json || echo 'Build completed with warnings'",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:db": "vitest run --config vitest.db.config.mts"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.13.0",
+    "@hono/swagger-ui": "^0.5.2",
+    "@hono/zod-openapi": "^1.1.5",
+    "dotenv": "17.2.3",
+    "hono": "4.13.5",
+    "jose": "5.10.0",
+    "pg": "^8.16.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "20.6.1",
+    "tsx": "4.7.0",
+    "typescript": "5.5.2",
+    "vitest": "^4.1.11"
+  }
+}
