@@ -8,6 +8,7 @@ import {
   isRaiseException,
   isUniqueViolation,
 } from './pg-errors';
+import { MSG, MSG_AJUSTE } from '../validation/sales-orders.validation';
 
 export type PvErrorStatus = 400 | 404 | 409;
 
@@ -31,9 +32,11 @@ export const NOT_FOUND_MESSAGE = 'El pedido no existe';
 
 export const orderNotFound = () => new SalesOrderError(404, NOT_FOUND_CODE, NOT_FOUND_MESSAGE);
 
-// Every code raised by so_raise() in migration 20261015031310_create_sales_orders.
-// Keep in sync with the code list at the top of that migration.
+// Every code raised by so_raise() in migrations 20261015031310_create_sales_orders
+// and 20261017034032_sales_orders_ajustes. Keep in sync with their headers.
 export const PV_ERROR_STATUS: Record<string, PvErrorStatus> = {
+  // Ajustes (constraint trigger diferido: llega en el COMMIT)
+  PV_DESCUENTO_EXCEDE_SUBTOTAL: 400,
   // Validación (datos enviados)
   PV_CLIENTE_NO_ENCONTRADO: 400,
   PV_CLIENTE_OTRO_PROYECTO: 400,
@@ -70,7 +73,33 @@ export const parsePvMessage = (err: unknown): { code: string; message: string } 
   return { code, message: match[2].trim() };
 };
 
-const FECHAS_CHECK_CONSTRAINT = 'sales_orders_fechas_check';
+// Codes whose DB text is replaced by a fixed one: the DB message for the
+// discount names the order ("... del pedido PED-0001."), the frontend shows
+// the same sentence as its own form validation.
+const PV_FIXED_MESSAGE: Record<string, string> = {
+  PV_DESCUENTO_EXCEDE_SUBTOTAL: MSG.descuentoExcede,
+};
+
+// One entry per CHECK constraint the user can trip. zod rejects all of
+// these first; this is the safety net if a request slips past it.
+const CHECK_BY_CONSTRAINT: Record<string, { code: string; message: string }> = {
+  sales_orders_fechas_check: { code: 'PV_FECHAS_INVALIDAS', message: MSG.entregaAntes },
+  sales_orders_descuento_tipo_check: { code: 'PV_DESCUENTO_TIPO_INVALIDO', message: MSG_AJUSTE.descuento.tipo },
+  sales_orders_impuesto_tipo_check: { code: 'PV_IMPUESTO_TIPO_INVALIDO', message: MSG_AJUSTE.impuesto.tipo },
+  sales_orders_descuento_valor_check: { code: 'PV_DESCUENTO_NEGATIVO', message: MSG_AJUSTE.descuento.negativo },
+  sales_orders_impuesto_valor_check: { code: 'PV_IMPUESTO_NEGATIVO', message: MSG_AJUSTE.impuesto.negativo },
+  sales_orders_costo_envio_check: { code: 'PV_COSTO_ENVIO_NEGATIVO', message: MSG_AJUSTE.costoEnvio.negativo },
+  sales_orders_descuento_sin_tipo_check: { code: 'PV_DESCUENTO_SIN_TIPO', message: MSG_AJUSTE.descuento.sinTipo },
+  sales_orders_impuesto_sin_tipo_check: { code: 'PV_IMPUESTO_SIN_TIPO', message: MSG_AJUSTE.impuesto.sinTipo },
+  sales_orders_descuento_porcentaje_check: {
+    code: 'PV_DESCUENTO_PORCENTAJE_INVALIDO',
+    message: MSG_AJUSTE.descuento.porcentaje,
+  },
+  sales_orders_impuesto_porcentaje_check: {
+    code: 'PV_IMPUESTO_PORCENTAJE_INVALIDO',
+    message: MSG_AJUSTE.impuesto.porcentaje,
+  },
+};
 
 // sales_orders_numero_uniq is deliberately absent: a duplicated number is an
 // internal failure of the counter, not something the user can fix -> 500.
@@ -108,12 +137,13 @@ export const mapSalesOrderError = (err: unknown): Mapped | null => {
   const pv = parsePvMessage(err);
   if (pv) {
     const status = PV_ERROR_STATUS[pv.code];
-    return status ? known(status, pv.code, pv.message) : null;
+    return status ? known(status, pv.code, PV_FIXED_MESSAGE[pv.code] ?? pv.message) : null;
   }
 
   if (isCheckViolation(err)) {
-    return constraintName(err) === FECHAS_CHECK_CONSTRAINT
-      ? known(400, 'PV_FECHAS_INVALIDAS', 'La entrega no puede ser antes de la fecha del pedido')
+    const hit = CHECK_BY_CONSTRAINT[constraintName(err) ?? ''];
+    return hit
+      ? known(400, hit.code, hit.message)
       : known(400, 'PV_DATOS_INVALIDOS', 'Los datos del pedido no son válidos');
   }
 

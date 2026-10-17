@@ -1,5 +1,6 @@
 // Integration tests against the real sales_orders tables (supabase-tiendas,
-// migration 20261015031310_create_sales_orders). Run with `npm run test:db` -
+// migrations 20261015031310_create_sales_orders and
+// 20261017034032_sales_orders_ajustes). Run with `npm run test:db` -
 // needs the DATABASE_* / TIENDAS_DB_REF vars in .env.
 //
 // Everything runs inside ONE transaction that is always rolled back, so no
@@ -42,16 +43,26 @@ const query = (sql: string, params?: unknown[]) =>
     }
   });
 
+// RELEASE SAVEPOINT does not fire deferred constraint triggers (they wait for
+// the real COMMIT), so the emulated COMMIT forces them with SET CONSTRAINTS
+// ALL IMMEDIATE: trg_so_70_ajustes (PV_DESCUENTO_EXCEDE_SUBTOTAL) then fails
+// at the same point it would in production. BEGIN puts them back to deferred.
 const connect = async () => {
   const name = `tx_${++savepoint}`;
-  const statement: Record<string, string> = {
-    BEGIN: `SAVEPOINT ${name}`,
-    COMMIT: `RELEASE SAVEPOINT ${name}`,
-    ROLLBACK: `ROLLBACK TO SAVEPOINT ${name}`,
+  const statements: Record<string, string[]> = {
+    BEGIN: [`SAVEPOINT ${name}`, 'SET CONSTRAINTS ALL DEFERRED'],
+    COMMIT: ['SET CONSTRAINTS ALL IMMEDIATE', 'SET CONSTRAINTS ALL DEFERRED', `RELEASE SAVEPOINT ${name}`],
+    ROLLBACK: [`ROLLBACK TO SAVEPOINT ${name}`],
   };
   return {
     query: (sql: string, params?: unknown[]) =>
-      serial(() => holder.client!.query(statement[sql.trim().toUpperCase()] ?? sql, params)),
+      serial(async () => {
+        const tx = statements[sql.trim().toUpperCase()];
+        if (!tx) return holder.client!.query(sql, params);
+        let result;
+        for (const statement of tx) result = await holder.client!.query(statement);
+        return result!;
+      }),
     release: () => {},
   };
 };
@@ -505,5 +516,221 @@ describe('sales orders against the real database (rolled back)', () => {
 
     const rango = await call(a, `/sales-orders?id_customer=${F.clienteLista}&fecha_desde=2026-05-01&fecha_hasta=2026-09-09`);
     expect(rango.body.data.map((o: any) => o.id_sales_order)).toEqual([medio.id_sales_order]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Ajustes (migración 20261017034032_sales_orders_ajustes)
+  // ---------------------------------------------------------------------------
+  describe('ajustes: descuento, impuesto y envío', () => {
+    const SIN_AJUSTES = { descuento_tipo: null, descuento_valor: 0, impuesto_tipo: null, impuesto_valor: 0, costo_envio: 0 };
+    const AJUSTE_KEYS = [
+      'descuento_tipo',
+      'descuento_valor',
+      'impuesto_tipo',
+      'impuesto_valor',
+      'costo_envio',
+      'subtotal',
+      'descuento_monto',
+      'impuesto_monto',
+      'total',
+    ];
+
+    it('crea con 10% de descuento, 19% de impuesto y 8000 de envío: la BD calcula subtotal, montos y total', async () => {
+      const data = await crear({
+        lineas: [
+          { id_product: F.lapicero, cantidad: 2, precio_unitario: 2000 },
+          { id_product: F.cuaderno, cantidad: 3, precio_unitario: 900 },
+        ],
+        descuento_tipo: 'porcentaje',
+        descuento_valor: 10,
+        impuesto_tipo: 'porcentaje',
+        impuesto_valor: 19,
+        costo_envio: 8000,
+        // calculados: se ignoran
+        subtotal: 1,
+        descuento_monto: 1,
+        impuesto_monto: 1,
+        total: 1,
+      });
+
+      // 6700 - 670 = 6030; 6030 × 19% = 1145.70; 6030 + 1145.70 + 8000 = 15175.70
+      expect(data).toMatchObject({
+        descuento_tipo: 'porcentaje',
+        descuento_valor: '10.00',
+        impuesto_tipo: 'porcentaje',
+        impuesto_valor: '19.00',
+        costo_envio: '8000.00',
+        subtotal: '6700.00',
+        descuento_monto: '670.00',
+        impuesto_monto: '1145.70',
+        total: '15175.70',
+      });
+      expect((await call(a, `/sales-orders/${data.id_sales_order}`)).body.data).toEqual(data);
+    });
+
+    it('edita un pedido con descuento fijo reemplazando sus líneas en el mismo PUT', async () => {
+      const created = await crear({
+        lineas: [{ id_product: F.resma, cantidad: 1 }], // 18000
+        descuento_tipo: 'valor',
+        descuento_valor: 5000,
+      });
+      expect(created).toMatchObject({ subtotal: '18000.00', descuento_monto: '5000.00', total: '13000.00' });
+
+      // Al borrar las líneas el subtotal es 0 por un momento (< descuento); el
+      // trigger diferido solo mira el estado final. La línea sin precio usa el
+      // del producto, así que este tope lo valida la BD y no zod.
+      const edited = await call(a, `/sales-orders/${created.id_sales_order}`, 'PUT', pedido({
+        lineas: [{ id_product: F.cuaderno, cantidad: 1 }], // 9990
+        descuento_tipo: 'valor',
+        descuento_valor: 5000,
+        impuesto_tipo: 'valor',
+        impuesto_valor: 500,
+        costo_envio: 0,
+      }));
+      expect(edited.status, JSON.stringify(edited.body)).toBe(200);
+      expect(edited.body.data).toMatchObject({
+        descuento_tipo: 'valor',
+        descuento_valor: '5000.00',
+        subtotal: '9990.00',
+        descuento_monto: '5000.00',
+        impuesto_monto: '500.00',
+        total: '5490.00',
+      });
+      expect(edited.body.data.lineas.map((l: any) => l.id_product)).toEqual([F.cuaderno]);
+    });
+
+    it('PUT sin los campos de ajustes conserva los valores guardados', async () => {
+      const created = await crear({ descuento_tipo: 'porcentaje', descuento_valor: 10, costo_envio: 2000 });
+      const edited = await call(a, `/sales-orders/${created.id_sales_order}`, 'PUT', pedido({ notas: 'cliente viejo' }));
+      expect(edited.status).toBe(200);
+      expect(edited.body.data).toMatchObject({
+        notas: 'cliente viejo',
+        descuento_tipo: 'porcentaje',
+        descuento_valor: '10.00',
+        costo_envio: '2000.00',
+        subtotal: '18000.00',
+        descuento_monto: '1800.00',
+        total: '18200.00',
+      });
+    });
+
+    it('descuento fijo mayor que las líneas -> 400 PV_DESCUENTO_EXCEDE_SUBTOTAL (desde el COMMIT) sin dejar el pedido', async () => {
+      const before = await query('SELECT count(*)::int AS n FROM sales_orders WHERE id_own_project = $1', [PROJECT_A]);
+
+      // Sin precio en la línea la API no puede comparar: lo rechaza el trigger diferido.
+      const porBd = await call(a, '/sales-orders', 'POST', pedido({
+        lineas: [{ id_product: F.resma, cantidad: 1 }], // 18000
+        descuento_tipo: 'valor',
+        descuento_valor: 18000.01,
+      }));
+      expect(porBd.status).toBe(400);
+      expect(porBd.body).toEqual({
+        success: false,
+        error: 'Bad Request',
+        message: 'El descuento no puede ser mayor al subtotal del pedido',
+        code: 'PV_DESCUENTO_EXCEDE_SUBTOTAL',
+      });
+
+      // Con precio explícito lo ataja zod, con el mismo código y mensaje.
+      const api = await call(a, '/sales-orders', 'POST', pedido({
+        lineas: [{ id_product: F.resma, cantidad: 1, precio_unitario: 100 }],
+        descuento_tipo: 'valor',
+        descuento_valor: 100.01,
+      }));
+      expect(api.status).toBe(400);
+      expect(api.body).toEqual(porBd.body);
+
+      const after = await query('SELECT count(*)::int AS n FROM sales_orders WHERE id_own_project = $1', [PROJECT_A]);
+      expect(after.rows[0].n).toBe(before.rows[0].n);
+
+      // También al editar: bajar las líneas por debajo del descuento fijo.
+      const created = await crear({ lineas: [{ id_product: F.resma, cantidad: 1 }], descuento_tipo: 'valor', descuento_valor: 10000 });
+      const edit = await call(a, `/sales-orders/${created.id_sales_order}`, 'PUT', pedido({
+        lineas: [{ id_product: F.lapicero, cantidad: 1 }], // 2500 < 10000, sin precio -> lo valida la BD
+      }));
+      expect(edit.status).toBe(400);
+      expect(edit.body.code).toBe('PV_DESCUENTO_EXCEDE_SUBTOTAL');
+      expect(edit.body.message).toBe('El descuento no puede ser mayor al subtotal del pedido');
+      // rollback: el pedido sigue como estaba
+      expect((await call(a, `/sales-orders/${created.id_sales_order}`)).body.data).toMatchObject({
+        subtotal: '18000.00',
+        total: '8000.00',
+      });
+    });
+
+    it("editar ajustes en 'En camino' -> 409 PV_PEDIDO_NO_EDITABLE", async () => {
+      const { id_sales_order: id } = await crear();
+      await accion(id, 'prepare');
+      await accion(id, 'ship');
+
+      // Solo cambia un ajuste: misma cabecera y mismas líneas.
+      const res = await call(a, `/sales-orders/${id}`, 'PUT', pedido({ costo_envio: 3000 }));
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('PV_PEDIDO_NO_EDITABLE');
+      expect((await call(a, `/sales-orders/${id}`)).body.data.costo_envio).toBe('0.00');
+    });
+
+    it('/prepare, /ship, /deliver y /cancel devuelven los 9 campos', async () => {
+      const ajustes = { descuento_tipo: 'porcentaje', descuento_valor: 10, impuesto_tipo: 'valor', impuesto_valor: 1000, costo_envio: 500 };
+      // 18000 - 1800 = 16200; + 1000 + 500 = 17700
+      const esperado = {
+        descuento_tipo: 'porcentaje',
+        descuento_valor: '10.00',
+        impuesto_tipo: 'valor',
+        impuesto_valor: '1000.00',
+        costo_envio: '500.00',
+        subtotal: '18000.00',
+        descuento_monto: '1800.00',
+        impuesto_monto: '1000.00',
+        total: '17700.00',
+      };
+      const uno = await crear(ajustes);
+      for (const nombre of ['prepare', 'ship', 'deliver']) {
+        const res = await accion(uno.id_sales_order, nombre);
+        expect(res.status, nombre).toBe(200);
+        expect(res.body.data, nombre).toMatchObject(esperado);
+      }
+      const dos = await crear(ajustes);
+      const cancel = await accion(dos.id_sales_order, 'cancel');
+      expect(cancel.status).toBe(200);
+      expect(cancel.body.data).toMatchObject(esperado);
+
+      const list = await call(a, `/sales-orders?search=${encodeURIComponent(dos.numero)}`);
+      expect(list.body.data[0]).toMatchObject(esperado);
+    });
+
+    it('un pedido sin ajustes devuelve subtotal = total y descuento/impuesto/envío en 0', async () => {
+      // Cliente viejo: no manda ninguno de los 5 campos.
+      const data = await crear({ lineas: [{ id_product: F.resma, cantidad: 2 }] });
+      for (const key of AJUSTE_KEYS) expect(data, key).toHaveProperty(key);
+      expect(data).toMatchObject({
+        descuento_tipo: null,
+        descuento_valor: '0.00',
+        impuesto_tipo: null,
+        impuesto_valor: '0.00',
+        costo_envio: '0.00',
+        subtotal: '36000.00',
+        descuento_monto: '0.00',
+        impuesto_monto: '0.00',
+        total: '36000.00',
+      });
+      // Igual con el contrato del frontend (manda los 5 campos "vacíos").
+      const front = await crear({ lineas: [{ id_product: F.resma, cantidad: 2 }], ...SIN_AJUSTES });
+      expect(front).toMatchObject({ subtotal: '36000.00', total: '36000.00', descuento_monto: '0.00', impuesto_monto: '0.00' });
+    });
+
+    it('los CHECK de la BD respaldan a zod y se traducen a 400 con mensaje en español', async () => {
+      const { id_sales_order: id } = await crear();
+      for (const [set, code] of [
+        [`descuento_tipo = 'fijo'`, 'PV_DESCUENTO_TIPO_INVALIDO'],
+        [`impuesto_valor = 5`, 'PV_IMPUESTO_SIN_TIPO'],
+        [`descuento_tipo = 'porcentaje', descuento_valor = 101`, 'PV_DESCUENTO_PORCENTAJE_INVALIDO'],
+        [`costo_envio = -1`, 'PV_COSTO_ENVIO_NEGATIVO'],
+      ]) {
+        const err = await query(`UPDATE sales_orders SET ${set} WHERE id_sales_order = $1`, [id]).catch((e) => e);
+        expect(err.code, set).toBe('23514');
+        expect(mapSalesOrderError(err), set).toMatchObject({ status: 400, body: { code } });
+      }
+    });
   });
 });

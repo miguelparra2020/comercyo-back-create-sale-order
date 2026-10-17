@@ -169,7 +169,7 @@ describe('app wiring', () => {
       expect(res.status).toBe(201);
       const insert = query.mock.calls.find(([sql]) => /INSERT INTO sales_orders\b/.test(sql))!;
       expect(insert[1][0]).toBe(12);
-      expect(insert[1].at(-1)).toBe(7);
+      expect(insert[1][5]).toBe(7); // created_by_user_id
     });
 
     it('returns Spanish validation messages through the OpenAPI validator', async () => {

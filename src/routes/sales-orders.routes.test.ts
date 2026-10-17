@@ -43,6 +43,14 @@ const orderRow = (overrides: Record<string, unknown> = {}) => ({
   fecha_entrega: '2026-10-18',
   notas: '',
   estado: 'Pendiente',
+  descuento_tipo: null,
+  descuento_valor: '0.00',
+  impuesto_tipo: null,
+  impuesto_valor: '0.00',
+  costo_envio: '0.00',
+  subtotal: '51000.00',
+  descuento_monto: '0.00',
+  impuesto_monto: '0.00',
   total: '51000.00',
   atrasado: false,
   entregado_en: null,
@@ -50,6 +58,27 @@ const orderRow = (overrides: Record<string, unknown> = {}) => ({
   updated_at: null,
   ...overrides,
 });
+
+// 51000 - 10% (5100) = 45900; + 19% (8721) + envío 8000 = 62621
+const AJUSTADO = {
+  descuento_tipo: 'porcentaje',
+  descuento_valor: '10.00',
+  impuesto_tipo: 'porcentaje',
+  impuesto_valor: '19.00',
+  costo_envio: '8000.00',
+  subtotal: '51000.00',
+  descuento_monto: '5100.00',
+  impuesto_monto: '8721.00',
+  total: '62621.00',
+};
+
+const AJUSTES_BODY = {
+  descuento_tipo: 'porcentaje',
+  descuento_valor: 10,
+  impuesto_tipo: 'porcentaje',
+  impuesto_valor: 19,
+  costo_envio: 8000,
+};
 
 const lineRow = (overrides: Record<string, unknown> = {}) => ({
   id_sales_order: ORDER_ID,
@@ -242,7 +271,8 @@ describe('POST /sales-orders', () => {
     const insert = db.find(P.insertOrder)!;
     expect(insert.sql).toMatch(/created_by_user_id/);
     expect(insert.sql).toMatch(/RETURNING/);
-    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER]);
+    // sin ajustes en el body -> null / 0
+    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, null, 0, null, 0, 0]);
     // id_product normalizado a string; sin precio -> null (la BD usa precio_venta_linea)
     expect(db.find(P.insertLines)!.params).toEqual([ORDER_ID, ['789', '790'], [2, 1], [18000, null]]);
     expect(db.find(P.insertLines)!.sql).toMatch(/WITH ORDINALITY[\s\S]*ORDER BY l\.ord/);
@@ -422,6 +452,14 @@ describe('serialización', () => {
       fecha_entrega: '2026-10-18',
       notas: '',
       estado: 'Entregado',
+      descuento_tipo: null,
+      descuento_valor: '0.00',
+      impuesto_tipo: null,
+      impuesto_valor: '0.00',
+      costo_envio: '0.00',
+      subtotal: '51000.00',
+      descuento_monto: '0.00',
+      impuesto_monto: '0.00',
       total: '51000.00',
       atrasado: false,
       entregado_en: '2026-10-17T20:30:00.000Z',
@@ -637,7 +675,29 @@ describe('mapeo de errores de la BD -> HTTP', () => {
     const res = await send(buildApp(), '/sales-orders', 'POST', validBody());
 
     expect(res.status).toBe(status);
-    expect(await res.json()).toMatchObject({ success: false, message: 'Texto en español.', code });
+    const message = code === 'PV_DESCUENTO_EXCEDE_SUBTOTAL' ? 'El descuento no puede ser mayor al subtotal del pedido' : 'Texto en español.';
+    expect(await res.json()).toMatchObject({ success: false, message, code });
+  });
+
+  it.each([
+    ['sales_orders_descuento_tipo_check', 'PV_DESCUENTO_TIPO_INVALIDO', 'El tipo de descuento debe ser porcentaje, valor o null'],
+    ['sales_orders_impuesto_tipo_check', 'PV_IMPUESTO_TIPO_INVALIDO', 'El tipo de impuesto debe ser porcentaje, valor o null'],
+    ['sales_orders_descuento_valor_check', 'PV_DESCUENTO_NEGATIVO', 'El descuento no puede ser negativo'],
+    ['sales_orders_impuesto_valor_check', 'PV_IMPUESTO_NEGATIVO', 'El impuesto no puede ser negativo'],
+    ['sales_orders_costo_envio_check', 'PV_COSTO_ENVIO_NEGATIVO', 'El costo de envío no puede ser negativo'],
+    ['sales_orders_descuento_sin_tipo_check', 'PV_DESCUENTO_SIN_TIPO', 'El descuento debe ser 0 si no se indica si es porcentaje o valor'],
+    ['sales_orders_impuesto_sin_tipo_check', 'PV_IMPUESTO_SIN_TIPO', 'El impuesto debe ser 0 si no se indica si es porcentaje o valor'],
+    ['sales_orders_descuento_porcentaje_check', 'PV_DESCUENTO_PORCENTAJE_INVALIDO', 'El descuento no puede ser mayor a 100%'],
+    ['sales_orders_impuesto_porcentaje_check', 'PV_IMPUESTO_PORCENTAJE_INVALIDO', 'El impuesto no puede ser mayor a 100%'],
+  ])('CHECK %s (PUT) -> 400 %s con message en español', async (constraint, code, message) => {
+    happyDb().on(P.updateHeader, () => {
+      throw pgError('23514', constraint);
+    });
+    const res = await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody());
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ success: false, error: 'Bad Request', message, code });
+    expect(db.statements().at(-1)).toBe('ROLLBACK');
   });
 
   it.each([
@@ -678,5 +738,180 @@ describe('mapeo de errores de la BD -> HTTP', () => {
     });
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+});
+
+// ===========================================================================
+describe('ajustes: descuento, impuesto y envío', () => {
+  const AJUSTES_SELECT = [
+    'so.descuento_tipo',
+    'so.descuento_valor::text AS descuento_valor',
+    'so.impuesto_tipo',
+    'so.impuesto_valor::text AS impuesto_valor',
+    'so.costo_envio::text AS costo_envio',
+    'so.subtotal::text AS subtotal',
+    'so.descuento_monto::text AS descuento_monto',
+    'so.impuesto_monto::text AS impuesto_monto',
+    'so.total::text AS total',
+  ];
+
+  // validBody: 2×18000 + 1×(sin precio); con precio explícito la API puede comparar el descuento fijo.
+  const lineasConPrecio = [
+    { id_product: 789, cantidad: 2, precio_unitario: 18000 },
+    { id_product: 790, cantidad: 1, precio_unitario: 15000 },
+  ];
+
+  it('POST escribe los 5 campos editables en el INSERT de la cabecera y nunca los calculados', async () => {
+    happyDb(orderRow(AJUSTADO));
+    const res = await send(buildApp(), '/sales-orders', 'POST', {
+      ...validBody(AJUSTES_BODY),
+      subtotal: '1.00',
+      descuento_monto: '999',
+      impuesto_monto: '999',
+      total: '1.00',
+    });
+
+    expect(res.status).toBe(201);
+    const insert = db.find(P.insertOrder)!;
+    expect(insert.sql).toMatch(/descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio/);
+    expect(insert.params.slice(6)).toEqual(['porcentaje', 10, 'porcentaje', 19, 8000]);
+    for (const call of writeSql()) {
+      const columns = call.sql.split(/RETURNING|SELECT|WHERE/i)[0];
+      expect(columns).not.toMatch(/\b(subtotal|descuento_monto|impuesto_monto|total)\b/);
+    }
+    expect(JSON.stringify(insert.params)).not.toMatch(/"1\.00"|"999"/);
+    expect(db.statements()).toEqual([
+      'BEGIN',
+      'INSERT sales_orders',
+      'INSERT sales_order_lines',
+      'SELECT v_sales_orders',
+      'SELECT sales_order_lines',
+      'COMMIT',
+    ]);
+    expect((await res.json()).data).toMatchObject(AJUSTADO);
+  });
+
+  it('PUT escribe los 5 campos en el UPDATE de la cabecera, antes de reemplazar las líneas', async () => {
+    happyDb(orderRow(AJUSTADO));
+    const res = await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody(AJUSTES_BODY));
+
+    expect(res.status).toBe(200);
+    const update = db.find(P.updateHeader)!;
+    expect(update.sql).toMatch(
+      /descuento_tipo = \$5, descuento_valor = \$6::numeric, impuesto_tipo = \$7, impuesto_valor = \$8::numeric, costo_envio = \$9::numeric,\s+updated_by_user_id = \$10\s+WHERE id_sales_order = \$11 AND id_own_project = \$12/
+    );
+    expect(update.params).toEqual([
+      '5', '2026-10-15', '2026-10-18', 'Entregar en portería',
+      'porcentaje', 10, 'porcentaje', 19, 8000,
+      ID_USER, ORDER_ID, ID_OWN_PROJECT,
+    ]);
+    expect(db.statements()).toEqual([
+      'BEGIN',
+      'UPDATE sales_orders.id_customer',
+      'DELETE sales_order_lines',
+      'INSERT sales_order_lines',
+      'SELECT v_sales_orders',
+      'SELECT sales_order_lines',
+      'COMMIT',
+    ]);
+    expect((await res.json()).data).toMatchObject(AJUSTADO);
+  });
+
+  it('PUT sin los campos de ajustes no los toca: conservan el valor actual del pedido', async () => {
+    happyDb(orderRow(AJUSTADO));
+    const res = await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody());
+
+    expect(res.status).toBe(200);
+    const update = db.find(P.updateHeader)!;
+    expect(update.sql).not.toMatch(/descuento|impuesto|costo_envio/);
+    expect(update.params).toEqual(['5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, ORDER_ID, ID_OWN_PROJECT]);
+    // la respuesta trae los ajustes que ya tenía
+    expect((await res.json()).data).toMatchObject(AJUSTADO);
+  });
+
+  it('PUT con solo algunos ajustes actualiza solo esos', async () => {
+    happyDb();
+    await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({ costo_envio: 5000, impuesto_tipo: null, impuesto_valor: 0 }));
+    const update = db.find(P.updateHeader)!;
+    expect(update.sql).toMatch(/impuesto_tipo = \$5, impuesto_valor = \$6::numeric, costo_envio = \$7::numeric/);
+    expect(update.sql).not.toMatch(/descuento/);
+    expect(update.params.slice(4, 7)).toEqual([null, 0, 5000]);
+  });
+
+  it.each([
+    ['POST', '/sales-orders'],
+    ['PUT', `/sales-orders/${ORDER_ID}`],
+  ])('%s valida los ajustes -> 400 PV_VALIDACION sin tocar la BD', async (method, path) => {
+    const casos: [Record<string, unknown>, string][] = [
+      [{ descuento_tipo: null, descuento_valor: 5 }, 'El descuento debe ser 0 si no se indica si es porcentaje o valor'],
+      [{ impuesto_tipo: 'porcentaje', impuesto_valor: 101 }, 'El impuesto no puede ser mayor a 100%'],
+      [{ costo_envio: 1.234 }, 'El costo de envío debe tener máximo 2 decimales'],
+      [{ costo_envio: -1 }, 'El costo de envío no puede ser negativo'],
+      [{ descuento_tipo: 'fijo', descuento_valor: 1 }, 'El tipo de descuento debe ser porcentaje, valor o null'],
+    ];
+    for (const [overrides, message] of casos) {
+      const res = await send(buildApp(), path, method, validBody(overrides));
+      expect(res.status, message).toBe(400);
+      expect(await res.json()).toEqual({ success: false, error: 'Bad Request', message, code: 'PV_VALIDACION' });
+    }
+    expect(db.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ['POST', '/sales-orders'],
+    ['PUT', `/sales-orders/${ORDER_ID}`],
+  ])('%s: descuento fijo mayor que las líneas del body -> 400 PV_DESCUENTO_EXCEDE_SUBTOTAL sin tocar la BD', async (method, path) => {
+    const res = await send(buildApp(), path, method, validBody({ descuento_tipo: 'valor', descuento_valor: 51000.01, lineas: lineasConPrecio }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      success: false,
+      error: 'Bad Request',
+      message: 'El descuento no puede ser mayor al subtotal del pedido',
+      code: 'PV_DESCUENTO_EXCEDE_SUBTOTAL',
+    });
+    expect(db.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ['POST', '/sales-orders'],
+    ['PUT', `/sales-orders/${ORDER_ID}`],
+  ])('%s: PV_DESCUENTO_EXCEDE_SUBTOTAL llega en el COMMIT (trigger diferido) -> 400 con message limpio', async (method, path) => {
+    happyDb().on(/^COMMIT$/, () => {
+      throw pvError('PV_DESCUENTO_EXCEDE_SUBTOTAL', 'El descuento no puede ser mayor al subtotal del pedido PED-0001.');
+    });
+    // La segunda línea no trae precio: la API no puede comparar, lo atrapa la BD.
+    const res = await send(buildApp(), path, method, validBody({ descuento_tipo: 'valor', descuento_valor: 99999 }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      success: false,
+      error: 'Bad Request',
+      message: 'El descuento no puede ser mayor al subtotal del pedido',
+      code: 'PV_DESCUENTO_EXCEDE_SUBTOTAL',
+    });
+    expect(db.statements().slice(-2)).toEqual(['COMMIT', 'ROLLBACK']);
+    expect(db.release).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['prepare', 'ship', 'deliver', 'cancel'])('/%s devuelve los 9 campos de ajustes', async (action) => {
+    happyDb(orderRow(AJUSTADO));
+    const res = await send(buildApp(), `/sales-orders/${ORDER_ID}/${action}`, 'POST');
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toMatchObject(AJUSTADO);
+    for (const column of AJUSTES_SELECT) expect(db.find(P.detail)!.sql).toContain(column);
+  });
+
+  it('listado, detalle y DELETE piden los 9 campos y los devuelven', async () => {
+    happyDb(orderRow(AJUSTADO));
+    const list = await send(buildApp(), '/sales-orders');
+    expect((await list.json()).data[0]).toMatchObject(AJUSTADO);
+    const detail = await send(buildApp(), `/sales-orders/${ORDER_ID}`);
+    expect((await detail.json()).data).toMatchObject(AJUSTADO);
+    const deleted = await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'DELETE');
+    expect((await deleted.json()).data).toMatchObject(AJUSTADO);
+
+    for (const pattern of [P.page, P.detail, P.softDelete]) {
+      for (const column of AJUSTES_SELECT) expect(db.find(pattern)!.sql).toContain(column);
+    }
   });
 });

@@ -42,6 +42,21 @@ describe('withTransaction', () => {
     expect(release).toHaveBeenCalledWith(undefined);
   });
 
+  // Deferred constraint triggers (trg_so_70_ajustes) raise on COMMIT, not on
+  // the statement: that error must reach the caller untouched.
+  it('relanza el error del COMMIT (constraint diferido) y no devuelve el resultado', async () => {
+    const { pool, statements, release } = fakePool('COMMIT');
+    await expect(
+      withTransaction(pool, async (client) => {
+        await client.query('INSERT 1');
+        return 'ok';
+      })
+    ).rejects.toThrow('COMMIT failed');
+
+    expect(statements).toEqual(['BEGIN', 'INSERT 1', 'COMMIT', 'ROLLBACK']);
+    expect(release).toHaveBeenCalledWith(undefined);
+  });
+
   it('destruye la conexión si el ROLLBACK también falla', async () => {
     const { pool, release } = fakePool('ROLLBACK');
     await expect(

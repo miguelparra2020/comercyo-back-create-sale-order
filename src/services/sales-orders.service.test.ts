@@ -37,7 +37,15 @@ describe('toOrderDto', () => {
         fecha_entrega: '2026-10-18',
         notas: '',
         estado: 'Entregado',
-        total: '51000.00',
+        descuento_tipo: 'porcentaje',
+        descuento_valor: '10.00',
+        impuesto_tipo: 'valor',
+        impuesto_valor: '1000.00',
+        costo_envio: '8000.00',
+        subtotal: '36000.00',
+        descuento_monto: '3600.00',
+        impuesto_monto: '1000.00',
+        total: '41400.00',
         atrasado: false,
         entregado_en: new Date('2026-10-17T20:30:00.000Z'),
         created_at: new Date('2026-10-15T15:00:00.000Z'),
@@ -66,7 +74,15 @@ describe('toOrderDto', () => {
       fecha_entrega: '2026-10-18',
       notas: '',
       estado: 'Entregado',
-      total: '51000.00',
+      descuento_tipo: 'porcentaje',
+      descuento_valor: '10.00',
+      impuesto_tipo: 'valor',
+      impuesto_valor: '1000.00',
+      costo_envio: '8000.00',
+      subtotal: '36000.00',
+      descuento_monto: '3600.00',
+      impuesto_monto: '1000.00',
+      total: '41400.00',
       atrasado: false,
       entregado_en: '2026-10-17T20:30:00.000Z',
       created_at: '2026-10-15T15:00:00.000Z',
@@ -83,6 +99,21 @@ describe('toOrderDto', () => {
         },
       ],
     });
+  });
+
+  it('un pedido sin ajustes: tipos null, valores y montos en 0, subtotal = total', () => {
+    const sinAjustes = {
+      descuento_tipo: null,
+      descuento_valor: '0.00',
+      impuesto_tipo: null,
+      impuesto_valor: '0.00',
+      costo_envio: '0.00',
+      subtotal: '51000.00',
+      descuento_monto: '0.00',
+      impuesto_monto: '0.00',
+      total: '51000.00',
+    };
+    expect(toOrderDto(sinAjustes, [])).toMatchObject(sinAjustes);
   });
 
   it('atrasado solo es true si la BD devolvió exactamente true', () => {

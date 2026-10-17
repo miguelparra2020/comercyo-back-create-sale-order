@@ -7,8 +7,9 @@ Base: `/api/v1` · Swagger UI: `/api/v1/doc` · OpenAPI: `/api/v1/openapi.json`
 | Local      | `http://localhost:3007/api/v1`                         |
 | Producción | `https://comercyo-back-create-sale-order.vercel.app/api/v1` |
 
-Base de datos: `supabase-tiendas`, migración `20261015031310_create_sales_orders`
-(tablas `sales_orders`, `sales_order_lines`, `sales_order_counters`, vista `v_sales_orders`).
+Base de datos: `supabase-tiendas`, migraciones `20261015031310_create_sales_orders`
+(tablas `sales_orders`, `sales_order_lines`, `sales_order_counters`, vista `v_sales_orders`)
+y `20261017034032_sales_orders_ajustes` (descuento, impuesto y envío a nivel de pedido).
 Las tablas tienen RLS sin políticas: solo este backend las lee y escribe, por conexión directa.
 
 ## Autenticación y alcance
@@ -26,7 +27,8 @@ Límite: 100 peticiones/minuto por IP → 429 `RATE_LIMITED`.
 
 ## Qué hace la base de datos (y la API no envía)
 
-`numero` (PED-0001, consecutivo por proyecto y seguro ante concurrencia), `total`, `subtotal`,
+`numero` (PED-0001, consecutivo por proyecto y seguro ante concurrencia), `total`, `subtotal`
+(de la línea y del pedido), `descuento_monto`, `impuesto_monto`,
 `cliente_nombre` (copia de `customers.nombre`), `producto_nombre` y `referencia` (copia de
 `productos.nombre` y `productos.sku`), `precio_unitario` por defecto (`precio_venta_linea` del
 producto), `entregado_en`, la máquina de estados, el bloqueo de edición y de borrado, la
@@ -48,7 +50,15 @@ La API ignora esos campos si vienen en el body. El estado solo cambia con
   "fecha_entrega": "2026-10-18",
   "notas": "",
   "estado": "Pendiente",
-  "total": "51000.00",
+  "descuento_tipo": "porcentaje",
+  "descuento_valor": "10.00",
+  "impuesto_tipo": "porcentaje",
+  "impuesto_valor": "19.00",
+  "costo_envio": "8000.00",
+  "subtotal": "36000.00",
+  "descuento_monto": "3600.00",
+  "impuesto_monto": "6156.00",
+  "total": "46556.00",
   "atrasado": false,
   "entregado_en": null,
   "created_at": "2026-10-15T15:00:00.000Z",
@@ -70,13 +80,49 @@ La API ignora esos campos si vienen en el body. El estado solo cambia con
 - bigint (`id_sales_order`, `id_sales_order_line`, `id_product`, **`id_customer`**) → string.
   `id_customer` va como string igual que en `comercyo-back-create-customers`.
 - `id_own_project` → number (igual que en órdenes de compra).
-- numeric (`total`, `precio_unitario`, `subtotal`) → string con 2 decimales.
+- numeric (`descuento_valor`, `impuesto_valor`, `costo_envio`, `subtotal`, `descuento_monto`,
+  `impuesto_monto`, `total`, `precio_unitario`, `subtotal` de la línea) → string con 2 decimales.
+- `descuento_tipo`, `impuesto_tipo` → `"porcentaje"`, `"valor"` o `null`.
 - `fecha`, `fecha_entrega` → `YYYY-MM-DD` sin hora ni zona (no se desplazan un día).
 - `entregado_en`, `created_at`, `updated_at` → ISO 8601 en UTC o `null`.
   `updated_at` ya viene con valor en un pedido recién creado: al insertar las líneas la BD
   recalcula el total de la cabecera y eso cuenta como actualización.
 - `lineas` en el orden en que se enviaron.
 - `cantidad` → number.
+
+### Ajustes: descuento, impuesto y envío
+
+Tres ajustes opcionales a nivel de pedido. Los 9 campos vienen en **todas** las respuestas que
+devuelven un pedido (listado, detalle, POST, PUT, DELETE y `/prepare`, `/ship`, `/deliver`, `/cancel`).
+
+| Campo             | Quién lo escribe | Valores                                   |
+| ----------------- | ---------------- | ----------------------------------------- |
+| `descuento_tipo`  | API              | `"porcentaje"` \| `"valor"` \| `null`     |
+| `descuento_valor` | API              | ≥ 0, 2 decimales (default 0)              |
+| `impuesto_tipo`   | API              | `"porcentaje"` \| `"valor"` \| `null`     |
+| `impuesto_valor`  | API              | ≥ 0, 2 decimales (default 0)              |
+| `costo_envio`     | API              | ≥ 0, 2 decimales (default 0)              |
+| `subtotal`        | BD, solo lectura | suma de las líneas                        |
+| `descuento_monto` | BD, solo lectura |                                           |
+| `impuesto_monto`  | BD, solo lectura |                                           |
+| `total`           | BD, solo lectura |                                           |
+
+Cálculo (trigger `sales_orders_sync_total`, todo a 2 decimales):
+
+```
+subtotal        = SUM(cantidad × precio_unitario) de las líneas
+descuento_monto = 'porcentaje' → ROUND(subtotal × descuento_valor / 100, 2) | 'valor' → descuento_valor | null → 0
+base            = subtotal − descuento_monto
+impuesto_monto  = sobre la BASE ya descontada: 'porcentaje' → ROUND(base × impuesto_valor / 100, 2) | 'valor' → impuesto_valor | null → 0
+total           = base + impuesto_monto + costo_envio      (el envío no lleva impuesto)
+```
+
+Ejemplo: líneas 2×2000 + 3×900, 10 % de descuento, 19 % de impuesto y 8000 de envío →
+`subtotal` 6700, `descuento_monto` 670, `impuesto_monto` 1145.70, `total` 15175.70.
+
+Un pedido sin ajustes tiene tipos `null`, valores y montos en `"0.00"` y `subtotal` = `total`.
+Los ajustes son parte de la cabecera: solo se cambian en Pendiente o En preparación
+(si no → 409 `PV_PEDIDO_NO_EDITABLE`).
 
 ### Sobre `atrasado`
 
@@ -162,7 +208,12 @@ curl -s -X POST http://localhost:3007/api/v1/sales-orders \
     "lineas": [
       { "id_product": 789, "cantidad": 2, "precio_unitario": 18000 },
       { "id_product": "790", "cantidad": 1 }
-    ]
+    ],
+    "descuento_tipo": "porcentaje",
+    "descuento_valor": 10,
+    "impuesto_tipo": null,
+    "impuesto_valor": 0,
+    "costo_envio": 8000
   }'
 ```
 
@@ -176,18 +227,50 @@ curl -s -X POST http://localhost:3007/api/v1/sales-orders \
 | `lineas[].id_product`       | obligatorio, entero positivo (número o string de dígitos)    |
 | `lineas[].cantidad`         | obligatoria, entero ≥ 1                                      |
 | `lineas[].precio_unitario`  | opcional, número ≥ 0 con máx. 2 decimales; si falta o es `null` se usa el `precio_venta_linea` del producto |
+| `descuento_tipo`            | opcional: `"porcentaje"` \| `"valor"` \| `null` (default `null`) |
+| `descuento_valor`           | opcional, número ≥ 0 con máx. 2 decimales (default 0)         |
+| `impuesto_tipo`             | opcional: `"porcentaje"` \| `"valor"` \| `null` (default `null`) |
+| `impuesto_valor`            | opcional, número ≥ 0 con máx. 2 decimales (default 0)         |
+| `costo_envio`               | opcional, número ≥ 0 con máx. 2 decimales (default 0)         |
 
-Se ejecuta en **una transacción**: INSERT cabecera (Pendiente, `RETURNING`) → INSERT líneas →
-releer el pedido completo. Si algo falla no queda nada (ni se consume el número).
+Reglas cruzadas de los ajustes:
+
+- tipo `null` (o ausente en POST) → el valor tiene que ser `0`. Si no, 400; **no** se pasa a 0 en silencio.
+- tipo `"porcentaje"` → valor ≤ 100 (descuento e impuesto).
+- `descuento_tipo = "valor"` → `descuento_valor` ≤ SUM(`cantidad` × `precio_unitario`) de las líneas
+  del body; si no → 400 `PV_DESCUENTO_EXCEDE_SUBTOTAL`. Si alguna línea no trae precio (lo pone la
+  BD desde el producto), la API no puede sumar y la regla la aplica la BD al confirmar la
+  transacción, con el mismo código y mensaje.
+- El impuesto en `"valor"` no tiene tope.
+- `subtotal`, `descuento_monto`, `impuesto_monto` y `total` se ignoran si vienen en el body; nunca se escriben.
+
+El frontend siempre envía los 5 campos; sin tipo manda `"descuento_tipo": null, "descuento_valor": 0`
+(igual para el impuesto).
+
+Se ejecuta en **una transacción**: INSERT cabecera (Pendiente, con los ajustes, `RETURNING`) →
+INSERT líneas → releer el pedido completo. Si algo falla no queda nada (ni se consume el número).
 `201 { success: true, data: <pedido> }`.
+
+La cabecera se inserta antes que las líneas (subtotal 0 en ese momento), por eso el tope del
+descuento fijo lo valida un constraint trigger **diferido** (`trg_so_70_ajustes`): el error sale
+en el `COMMIT`, `withTransaction` lo relanza y se responde 400 `PV_DESCUENTO_EXCEDE_SUBTOTAL`.
 
 ## PUT /sales-orders/:id
 
-Mismo body que POST. Reemplaza la cabecera y **todas** las líneas, en una transacción:
-UPDATE cabecera → DELETE líneas → INSERT líneas → releer. Solo en Pendiente o En preparación
-(si no → 409 `PV_PEDIDO_NO_EDITABLE`); el estado no cambia. Como las líneas se vuelven a
-insertar, sus nombres, referencias y (si no se envía precio) precios se toman de nuevo del
-producto, y sus `id_sales_order_line` cambian.
+Mismo body y mismas reglas que POST. Reemplaza la cabecera y **todas** las líneas, en una transacción:
+UPDATE cabecera (con los ajustes) → DELETE líneas → INSERT líneas → releer. Solo en Pendiente o
+En preparación (si no → 409 `PV_PEDIDO_NO_EDITABLE`, también si solo cambia un ajuste); el estado
+no cambia. Como las líneas se vuelven a insertar, sus nombres, referencias y (si no se envía
+precio) precios se toman de nuevo del producto, y sus `id_sales_order_line` cambian.
+
+**Ajustes en PUT:** un campo de ajuste que **no venga** en el body conserva el valor actual del
+pedido (no entra en el `SET`), para que un cliente que no los conoce no los borre. Para quitar un
+ajuste hay que enviarlo explícito: `"descuento_tipo": null, "descuento_valor": 0`. Si solo viene el
+valor sin su tipo, la regla que depende del tipo guardado la aplica la BD (CHECK → 400).
+
+Durante el reemplazo de líneas el subtotal es 0 por un momento; el tope del descuento fijo se
+valida al `COMMIT` con el estado final, así que editar un pedido con descuento fijo cambiando sus
+líneas en el mismo PUT funciona.
 
 ```bash
 curl -s -X PUT http://localhost:3007/api/v1/sales-orders/123 \
@@ -255,10 +338,12 @@ Nunca se devuelve SQL, nombres de tablas ni stack. Un error no previsto → `500
 
 ### Códigos de la base de datos (`P0001`, mensaje `PV_<CODIGO>: texto`)
 
-El `message` de la respuesta es el texto de la BD sin el prefijo.
+El `message` de la respuesta es el texto de la BD sin el prefijo (salvo
+`PV_DESCUENTO_EXCEDE_SUBTOTAL`, que usa un texto fijo sin el número del pedido).
 
 | Código                       | HTTP | Cuándo                                                     |
 | ---------------------------- | ---- | ---------------------------------------------------------- |
+| `PV_DESCUENTO_EXCEDE_SUBTOTAL` | 400 | el descuento fijo es mayor que el subtotal; sale en el `COMMIT` (trigger diferido). Mensaje: "El descuento no puede ser mayor al subtotal del pedido" |
 | `PV_CLIENTE_NO_ENCONTRADO`   | 400  | el cliente no existe                                       |
 | `PV_CLIENTE_OTRO_PROYECTO`   | 400  | el cliente es de otro proyecto                             |
 | `PV_CLIENTE_INACTIVO`        | 400  | cliente inactivo o eliminado                               |
@@ -280,6 +365,7 @@ El `message` de la respuesta es el texto de la BD sin el prefijo.
 | Código                    | HTTP | Cuándo                                                     |
 | ------------------------- | ---- | ---------------------------------------------------------- |
 | `PV_VALIDACION`           | 400  | body, query o `:id` inválidos (mensaje del primer campo inválido) |
+| `PV_DESCUENTO_EXCEDE_SUBTOTAL` | 400 | la validación de la API detecta el descuento fijo mayor que las líneas (mismo código que la BD) |
 | `PV_PEDIDO_NO_ENCONTRADO` | 404  | no existe, es de otro proyecto o está borrado ("El pedido no existe") |
 | `INVALID_OWN_PROJECT`     | 400  | falta `x-own-project-id` o no es válido ("Selecciona un proyecto válido") |
 | `UNAUTHORIZED`            | 401  | sin token, o token inválido o vencido                      |
@@ -303,6 +389,16 @@ Los errores dentro de una línea llevan el prefijo `Línea N: `.
 | `cantidad` no entera o < 1             | Línea N: La cantidad debe ser un número entero mayor que 0 |
 | `precio_unitario` < 0                  | Línea N: El precio no puede ser negativo                 |
 | `precio_unitario` no numérico          | Línea N: El precio debe ser un número mayor o igual a 0  |
+| `descuento_tipo` inválido              | El tipo de descuento debe ser porcentaje, valor o null   |
+| `impuesto_tipo` inválido               | El tipo de impuesto debe ser porcentaje, valor o null    |
+| `descuento_valor` no numérico          | El descuento debe ser un número mayor o igual a 0        |
+| `descuento_valor` < 0                  | El descuento no puede ser negativo                       |
+| `descuento_valor` con > 2 decimales    | El descuento debe tener máximo 2 decimales               |
+| descuento sin tipo con valor ≠ 0       | El descuento debe ser 0 si no se indica si es porcentaje o valor |
+| descuento `porcentaje` > 100           | El descuento no puede ser mayor a 100%                   |
+| descuento `valor` > suma de líneas     | El descuento no puede ser mayor al subtotal del pedido (código `PV_DESCUENTO_EXCEDE_SUBTOTAL`) |
+| `impuesto_valor` (mismas reglas)       | El impuesto no puede ser negativo / … máximo 2 decimales / … mayor a 100% / … debe ser 0 si no se indica si es porcentaje o valor |
+| `costo_envio` no numérico, < 0 o > 2 decimales | El costo de envío debe ser un número mayor o igual a 0 / no puede ser negativo / debe tener máximo 2 decimales |
 
 ### Respaldo por constraint de Postgres
 
@@ -315,13 +411,26 @@ Por si algo se escapa de los triggers:
 | 23503 `sales_orders_id_customer_fkey`       | 400  | `PV_CLIENTE_NO_ENCONTRADO`  |
 | 23503 `sales_order_lines_id_product_fkey`   | 400  | `PV_PRODUCTO_NO_ENCONTRADO` |
 | 23514 `sales_orders_fechas_check`           | 400  | `PV_FECHAS_INVALIDAS`       |
+| 23514 `sales_orders_descuento_tipo_check`   | 400  | `PV_DESCUENTO_TIPO_INVALIDO` |
+| 23514 `sales_orders_impuesto_tipo_check`    | 400  | `PV_IMPUESTO_TIPO_INVALIDO` |
+| 23514 `sales_orders_descuento_valor_check`  | 400  | `PV_DESCUENTO_NEGATIVO`     |
+| 23514 `sales_orders_impuesto_valor_check`   | 400  | `PV_IMPUESTO_NEGATIVO`      |
+| 23514 `sales_orders_costo_envio_check`      | 400  | `PV_COSTO_ENVIO_NEGATIVO`   |
+| 23514 `sales_orders_descuento_sin_tipo_check` | 400 | `PV_DESCUENTO_SIN_TIPO`    |
+| 23514 `sales_orders_impuesto_sin_tipo_check`  | 400 | `PV_IMPUESTO_SIN_TIPO`     |
+| 23514 `sales_orders_descuento_porcentaje_check` | 400 | `PV_DESCUENTO_PORCENTAJE_INVALIDO` |
+| 23514 `sales_orders_impuesto_porcentaje_check`  | 400 | `PV_IMPUESTO_PORCENTAJE_INVALIDO`  |
 | 23514 otro                                  | 400  | `PV_DATOS_INVALIDOS`        |
+
+Los CHECK de ajustes responden con el mismo mensaje en español que la validación de la API
+para esa regla (la tabla de mensajes de arriba).
 | 22003 (valor numérico fuera de rango)       | 400  | `PV_VALOR_FUERA_DE_RANGO`   |
 | 22P02 (p. ej. estado inválido)              | 400  | `PV_VALIDACION`             |
 | cualquier otro / `PV_*` desconocido         | 500  | `INTERNAL_ERROR`            |
 
 El mapa vive en `src/lib/pv-errors.ts`; un test verifica que cubra exactamente
-los códigos de la migración (y, si el repo de BD está al lado, los `so_raise()` del archivo).
+los códigos de las migraciones (y, si el repo de BD está al lado, los `so_raise()` y los CHECK
+de ajustes de los archivos).
 
 ## Tests
 
@@ -329,3 +438,6 @@ los códigos de la migración (y, si el repo de BD está al lado, los `so_raise(
 npm test          # unitarios (vitest, BD simulada con src/test-utils/fake-db.ts)
 npm run test:db   # integración contra supabase-tiendas, todo dentro de una transacción con ROLLBACK
 ```
+
+En `test:db` el `COMMIT` del servicio se emula con `SET CONSTRAINTS ALL IMMEDIATE` + `RELEASE SAVEPOINT`,
+para que el trigger diferido de ajustes falle en el mismo punto que en producción.

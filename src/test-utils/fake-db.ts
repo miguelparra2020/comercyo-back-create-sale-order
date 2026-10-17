@@ -10,8 +10,9 @@ const TX_STATEMENT = /^\s*(BEGIN|COMMIT|ROLLBACK)\s*$/i;
 // In-memory stand-in for a pg Pool. Each statement is answered by the last
 // registered handler whose pattern matches it (so tests can override a
 // default); an unmatched statement fails the test loudly. BEGIN/COMMIT/
-// ROLLBACK always succeed and are recorded, which is what the atomicity
-// tests assert on.
+// ROLLBACK succeed unless a handler matches them (e.g. /^COMMIT$/ to emulate
+// a deferred constraint failing) and are always recorded, which is what the
+// atomicity tests assert on.
 export function createFakeDb() {
   const calls: Call[] = [];
   const handlers: { pattern: RegExp; respond: Responder }[] = [];
@@ -19,9 +20,8 @@ export function createFakeDb() {
 
   const run = async (via: Call['via'], sql: string, params: unknown[] = []) => {
     calls.push({ via, sql, params });
-    if (TX_STATEMENT.test(sql)) return { rows: [], rowCount: null };
-
     const handler = [...handlers].reverse().find((h) => h.pattern.test(sql));
+    if (!handler && TX_STATEMENT.test(sql)) return { rows: [], rowCount: null };
     if (!handler) throw new Error(`fake-db: unexpected SQL:\n${sql}`);
 
     const out = typeof handler.respond === 'function' ? await handler.respond(params) : handler.respond;

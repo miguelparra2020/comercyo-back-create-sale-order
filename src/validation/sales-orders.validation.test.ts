@@ -6,6 +6,8 @@ import {
   isValidDate,
   ListQuerySchema,
   OrderBodySchema,
+  subtotalLineasCentavos,
+  UpdateOrderBodySchema,
 } from './sales-orders.validation';
 
 const body = (overrides: Record<string, unknown> = {}) => ({
@@ -51,14 +53,40 @@ describe('OrderBodySchema', () => {
         { id_product: '789', cantidad: 1, precio_unitario: null },
         { id_product: '790', cantidad: 3, precio_unitario: 0 },
       ],
+      // POST sin ajustes: quedan en null / 0
+      descuento_tipo: null,
+      descuento_valor: 0,
+      impuesto_tipo: null,
+      impuesto_valor: 0,
+      costo_envio: 0,
     });
   });
 
-  it('descarta campos calculados o desconocidos', () => {
+  it('descarta campos calculados o desconocidos (incluidos subtotal, montos y total)', () => {
     const parsed = OrderBodySchema.parse(
-      body({ numero: 'PED-9999', total: '1', estado: 'Entregado', cliente_nombre: 'x', id_own_project: 99 })
+      body({
+        numero: 'PED-9999',
+        total: '1',
+        subtotal: '1',
+        descuento_monto: '1',
+        impuesto_monto: '1',
+        estado: 'Entregado',
+        cliente_nombre: 'x',
+        id_own_project: 99,
+      })
     ) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['fecha', 'fecha_entrega', 'id_customer', 'lineas', 'notas']);
+    expect(Object.keys(parsed).sort()).toEqual([
+      'costo_envio',
+      'descuento_tipo',
+      'descuento_valor',
+      'fecha',
+      'fecha_entrega',
+      'id_customer',
+      'impuesto_tipo',
+      'impuesto_valor',
+      'lineas',
+      'notas',
+    ]);
   });
 
   it('acepta entrega igual a la fecha y precios con 2 decimales no exactos en binario', () => {
@@ -104,6 +132,117 @@ describe('OrderBodySchema', () => {
   it('rechaza un body que no es objeto', () => {
     expect(firstMessage(null)).toBe('El cuerpo de la petición debe ser un objeto JSON');
     expect(firstMessage([])).toBe('El cuerpo de la petición debe ser un objeto JSON');
+  });
+});
+
+describe('ajustes (descuento, impuesto, envío)', () => {
+  // Contrato del frontend: siempre manda los 5 campos.
+  const ajustes = (overrides: Record<string, unknown> = {}) =>
+    body({
+      // subtotal de las líneas: 2×2000 + 3×900 = 6700
+      lineas: [
+        { id_product: 1, cantidad: 2, precio_unitario: 2000 },
+        { id_product: 2, cantidad: 3, precio_unitario: 900 },
+      ],
+      descuento_tipo: 'porcentaje',
+      descuento_valor: 10,
+      impuesto_tipo: 'porcentaje',
+      impuesto_valor: 19,
+      costo_envio: 8000,
+      ...overrides,
+    });
+
+  it('acepta los 5 campos y los devuelve tal cual', () => {
+    expect(OrderBodySchema.parse(ajustes())).toMatchObject({
+      descuento_tipo: 'porcentaje',
+      descuento_valor: 10,
+      impuesto_tipo: 'porcentaje',
+      impuesto_valor: 19,
+      costo_envio: 8000,
+    });
+  });
+
+  it.each([
+    ['sin tipo con valor 0', { descuento_tipo: null, descuento_valor: 0, impuesto_tipo: null, impuesto_valor: 0 }],
+    ['porcentaje exactamente 100', { descuento_valor: 100, impuesto_valor: 100 }],
+    ['descuento fijo igual al subtotal', { descuento_tipo: 'valor', descuento_valor: 6700 }],
+    ['impuesto fijo mayor que el subtotal (solo el descuento tiene tope)', { impuesto_tipo: 'valor', impuesto_valor: 99999 }],
+    ['2 decimales no exactos en binario', { descuento_tipo: 'valor', descuento_valor: 0.29, costo_envio: 1234.57 }],
+    ['envío 0', { costo_envio: 0 }],
+    // Una línea sin precio: la BD toma el del producto, así que el tope lo valida la BD al COMMIT.
+    ['descuento fijo con una línea sin precio', { descuento_tipo: 'valor', descuento_valor: 999999, lineas: [{ id_product: 1, cantidad: 1 }] }],
+  ])('acepta %s', (_label, overrides) => {
+    expect(firstMessage(ajustes(overrides))).toBeNull();
+  });
+
+  it.each([
+    ['tipo de descuento inválido', { descuento_tipo: 'fijo' }, 'El tipo de descuento debe ser porcentaje, valor o null'],
+    ['tipo de impuesto inválido', { impuesto_tipo: 'IVA' }, 'El tipo de impuesto debe ser porcentaje, valor o null'],
+    ['descuento negativo', { descuento_valor: -1 }, 'El descuento no puede ser negativo'],
+    ['impuesto negativo', { impuesto_valor: -0.01 }, 'El impuesto no puede ser negativo'],
+    ['envío negativo', { costo_envio: -5 }, 'El costo de envío no puede ser negativo'],
+    ['descuento con 3 decimales', { descuento_valor: 10.123 }, 'El descuento debe tener máximo 2 decimales'],
+    ['impuesto con 3 decimales', { impuesto_valor: 19.001 }, 'El impuesto debe tener máximo 2 decimales'],
+    ['envío con 3 decimales', { costo_envio: 8000.005 }, 'El costo de envío debe tener máximo 2 decimales'],
+    ['descuento texto', { descuento_valor: '10' }, 'El descuento debe ser un número mayor o igual a 0'],
+    ['descuento null', { descuento_valor: null }, 'El descuento debe ser un número mayor o igual a 0'],
+    ['envío texto', { costo_envio: 'gratis' }, 'El costo de envío debe ser un número mayor o igual a 0'],
+    ['envío fuera de numeric(14,2)', { costo_envio: 1e13 }, 'El costo de envío debe ser como máximo 999999999999.99'],
+    ['descuento > 100%', { descuento_valor: 100.01 }, 'El descuento no puede ser mayor a 100%'],
+    ['impuesto > 100%', { impuesto_valor: 101 }, 'El impuesto no puede ser mayor a 100%'],
+    ['descuento sin tipo con valor ≠ 0', { descuento_tipo: null, descuento_valor: 5 }, 'El descuento debe ser 0 si no se indica si es porcentaje o valor'],
+    ['impuesto sin tipo con valor ≠ 0', { impuesto_tipo: null, impuesto_valor: 19 }, 'El impuesto debe ser 0 si no se indica si es porcentaje o valor'],
+    ['descuento fijo mayor que las líneas', { descuento_tipo: 'valor', descuento_valor: 6700.01 }, 'El descuento no puede ser mayor al subtotal del pedido'],
+  ])('rechaza %s', (_label, overrides, message) => {
+    expect(firstMessage(ajustes(overrides))).toBe(message);
+  });
+
+  it('POST: tipo ausente cuenta como null, así que un valor ≠ 0 se rechaza (no se pasa a 0 en silencio)', () => {
+    expect(firstMessage(body({ descuento_valor: 5 }))).toBe('El descuento debe ser 0 si no se indica si es porcentaje o valor');
+    expect(firstMessage(body({ impuesto_valor: 19 }))).toBe('El impuesto debe ser 0 si no se indica si es porcentaje o valor');
+  });
+
+  it('subtotalLineasCentavos suma cantidad × precio en centavos sin error de coma flotante', () => {
+    expect(subtotalLineasCentavos([{ cantidad: 3, precio_unitario: 0.1 }, { cantidad: 1, precio_unitario: 0.2 }])).toBe(50n);
+    expect(subtotalLineasCentavos([{ cantidad: 2, precio_unitario: 2000 }, { cantidad: 3, precio_unitario: 900 }])).toBe(670000n);
+    expect(subtotalLineasCentavos([{ cantidad: 1, precio_unitario: null }])).toBeNull();
+    expect(subtotalLineasCentavos(undefined)).toBeNull();
+  });
+});
+
+describe('UpdateOrderBodySchema (PUT)', () => {
+  const firstUpdateMessage = (input: unknown) => {
+    const parsed = UpdateOrderBodySchema.safeParse(input);
+    return parsed.success ? null : formatIssue(parsed.error.issues);
+  };
+
+  it('los ajustes que no vienen quedan undefined (conservan el valor actual)', () => {
+    const parsed = UpdateOrderBodySchema.parse(body());
+    for (const campo of ['descuento_tipo', 'descuento_valor', 'impuesto_tipo', 'impuesto_valor', 'costo_envio'] as const) {
+      expect(parsed[campo], campo).toBeUndefined();
+    }
+  });
+
+  it('un tipo null explícito sí se respeta', () => {
+    expect(UpdateOrderBodySchema.parse(body({ descuento_tipo: null, descuento_valor: 0 }))).toMatchObject({
+      descuento_tipo: null,
+      descuento_valor: 0,
+    });
+  });
+
+  it('aplica las mismas reglas que POST a los campos que vienen', () => {
+    expect(firstUpdateMessage(body({ descuento_tipo: null, descuento_valor: 5 }))).toBe(
+      'El descuento debe ser 0 si no se indica si es porcentaje o valor'
+    );
+    expect(firstUpdateMessage(body({ impuesto_tipo: 'porcentaje', impuesto_valor: 150 }))).toBe('El impuesto no puede ser mayor a 100%');
+    expect(firstUpdateMessage(body({ descuento_tipo: 'valor', descuento_valor: 36000.01 }))).toBe(
+      'El descuento no puede ser mayor al subtotal del pedido'
+    );
+    expect(firstUpdateMessage(body({ costo_envio: -1 }))).toBe('El costo de envío no puede ser negativo');
+  });
+
+  it('un valor sin su tipo se deja pasar: la regla depende del tipo guardado y la valida la BD', () => {
+    expect(firstUpdateMessage(body({ descuento_valor: 5 }))).toBeNull();
   });
 });
 

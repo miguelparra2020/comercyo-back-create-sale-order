@@ -10,8 +10,11 @@ import {
   ESTADOS,
   formatIssue,
   IdParamSchema,
+  issueCode,
   ListQuerySchema,
   OrderBodySchema,
+  TIPOS_AJUSTE,
+  UpdateOrderBodySchema,
 } from '../validation/sales-orders.validation';
 
 type Vars = AuthVariables & OwnProjectVariables;
@@ -53,7 +56,28 @@ const SalesOrderSchema = z
     fecha_entrega: z.string().openapi({ example: '2026-10-18' }),
     notas: z.string(),
     estado: z.enum(ESTADOS),
-    total: z.string().openapi({ example: '51000.00' }),
+    descuento_tipo: z.enum(TIPOS_AJUSTE).nullable().openapi({ example: 'porcentaje' }),
+    descuento_valor: z.string().openapi({ example: '10.00' }),
+    impuesto_tipo: z.enum(TIPOS_AJUSTE).nullable().openapi({ example: 'porcentaje' }),
+    impuesto_valor: z.string().openapi({ example: '19.00' }),
+    costo_envio: z.string().openapi({ example: '8000.00' }),
+    subtotal: z.string().openapi({
+      example: '51000.00',
+      description: 'Solo lectura (calculado por la BD): SUM(cantidad × precio_unitario) de las líneas.',
+    }),
+    descuento_monto: z.string().openapi({
+      example: '5100.00',
+      description: "Solo lectura: 'porcentaje' → ROUND(subtotal × descuento_valor / 100, 2); 'valor' → descuento_valor; null → 0.",
+    }),
+    impuesto_monto: z.string().openapi({
+      example: '8721.00',
+      description:
+        "Solo lectura: sobre base = subtotal - descuento_monto. 'porcentaje' → ROUND(base × impuesto_valor / 100, 2); 'valor' → impuesto_valor; null → 0.",
+    }),
+    total: z.string().openapi({
+      example: '62621.00',
+      description: 'Solo lectura: subtotal - descuento_monto + impuesto_monto + costo_envio (el envío no lleva impuesto).',
+    }),
     atrasado: z.boolean().openapi({
       description: 'Calculado por la BD con current_date (UTC). Solo informativo, no se usa en reglas de negocio.',
     }),
@@ -122,10 +146,11 @@ const respondError = (c: Context, err: unknown) => {
 };
 
 // Validates the POST/PUT body. Returns the parsed input or the error response.
-const parseOrderBody = async (c: Context) => {
-  const parsed = OrderBodySchema.safeParse(await parseJson(c));
+const parseOrderBody = async <T>(c: Context, schema: { safeParse: (value: unknown) => z.ZodSafeParseResult<T> }) => {
+  const parsed = schema.safeParse(await parseJson(c));
   if (!parsed.success) {
-    return { response: badRequest(c, formatIssue(parsed.error.issues)) };
+    const { issues } = parsed.error;
+    return { response: c.json(errorBody(400, issueCode(issues) ?? VALIDATION_CODE, formatIssue(issues)), 400) };
   }
   return { input: parsed.data };
 };
@@ -133,6 +158,15 @@ const parseOrderBody = async (c: Context) => {
 // --------------------------------------------------------------------------
 // Routes
 // --------------------------------------------------------------------------
+
+const AJUSTES_DESCRIPTION = [
+  'Ajustes opcionales a nivel de pedido: descuento_tipo/descuento_valor, impuesto_tipo/impuesto_valor y costo_envio.',
+  "- tipo: 'porcentaje' | 'valor' | null. Con tipo null el valor debe ser 0 (si no, 400).",
+  "- valores: número >= 0 con máximo 2 decimales; con 'porcentaje', <= 100.",
+  "- descuento 'valor': <= SUM(cantidad × precio_unitario) de las líneas, si no 400 PV_DESCUENTO_EXCEDE_SUBTOTAL.",
+  '- subtotal, descuento_monto, impuesto_monto y total los calcula la BD; si vienen en el body se ignoran.',
+  'Cálculo: base = subtotal - descuento_monto; impuesto_monto sobre la base; total = base + impuesto_monto + costo_envio.',
+].join('\n');
 
 const TRANSITION_SUMMARIES: Record<service.Transicion, string> = {
   prepare: 'Preparar: Pendiente -> En preparación',
@@ -174,6 +208,7 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     method: 'post',
     path: '/sales-orders',
     summary: 'Crear un pedido de venta (queda en Pendiente)',
+    description: AJUSTES_DESCRIPTION + '\n\nPOST: un ajuste que no venga queda en null / 0.',
     request: { body: { ...json(OrderBodySchema), required: true } },
     responses: {
       201: { description: 'Pedido creado', ...json(SalesOrderResponseSchema) },
@@ -188,7 +223,11 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     method: 'put',
     path: '/sales-orders/{id}',
     summary: 'Reemplazar cabecera y líneas (solo en Pendiente o En preparación)',
-    request: { params: IdParamSchema, body: { ...json(OrderBodySchema), required: true } },
+    description:
+      AJUSTES_DESCRIPTION +
+      '\n\nPUT: un ajuste que no venga conserva el valor actual del pedido. Cambiar un ajuste fuera de ' +
+      "'Pendiente'/'En preparación' -> 409 PV_PEDIDO_NO_EDITABLE.",
+    request: { params: IdParamSchema, body: { ...json(UpdateOrderBodySchema), required: true } },
     responses: {
       200: { description: 'Pedido actualizado', ...json(SalesOrderResponseSchema) },
       ...errorResponses,
@@ -237,7 +276,7 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
   });
 
   apiV1.openapi(createRouteDef, async (c: Ctx) => {
-    const { input, response } = await parseOrderBody(c);
+    const { input, response } = await parseOrderBody(c, OrderBodySchema);
     if (response) return response;
     try {
       const data = await service.createSalesOrder(getUsersDb(), scopeOf(c), input);
@@ -248,7 +287,7 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
   });
 
   apiV1.openapi(updateRoute, async (c: Ctx) => {
-    const { input, response } = await parseOrderBody(c);
+    const { input, response } = await parseOrderBody(c, UpdateOrderBodySchema);
     if (response) return response;
     try {
       const data = await service.updateSalesOrder(getUsersDb(), scopeOf(c), c.req.param('id'), input);

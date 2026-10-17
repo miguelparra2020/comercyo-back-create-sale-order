@@ -2,7 +2,15 @@ import type { Pool, PoolClient } from 'pg';
 import { escapeLike } from '../lib/like';
 import { orderNotFound } from '../lib/pv-errors';
 import { withTransaction } from '../lib/transaction';
-import type { Estado, ListQuery, OrderBody, OrderLineInput } from '../validation/sales-orders.validation';
+import {
+  AJUSTES_COLUMNS,
+  type Estado,
+  type ListQuery,
+  type OrderBody,
+  type OrderLineInput,
+  type TipoAjuste,
+  type UpdateOrderBody,
+} from '../validation/sales-orders.validation';
 
 type Db = Pick<Pool, 'query' | 'connect'>;
 type Queryable = Pick<Pool | PoolClient, 'query'>;
@@ -42,6 +50,16 @@ export type SalesOrderDto = {
   fecha_entrega: string;
   notas: string;
   estado: Estado;
+  // Adjustments sent by the API.
+  descuento_tipo: TipoAjuste | null;
+  descuento_valor: string;
+  impuesto_tipo: TipoAjuste | null;
+  impuesto_valor: string;
+  costo_envio: string;
+  // Computed by the DB (sales_orders_sync_total), read-only.
+  subtotal: string;
+  descuento_monto: string;
+  impuesto_monto: string;
   total: string;
   atrasado: boolean;
   entregado_en: string | null;
@@ -68,6 +86,14 @@ const orderColumns = (atrasado: string) => `
   to_char(so.fecha_entrega, 'YYYY-MM-DD') AS fecha_entrega,
   so.notas,
   so.estado::text AS estado,
+  so.descuento_tipo,
+  so.descuento_valor::text AS descuento_valor,
+  so.impuesto_tipo,
+  so.impuesto_valor::text AS impuesto_valor,
+  so.costo_envio::text AS costo_envio,
+  so.subtotal::text AS subtotal,
+  so.descuento_monto::text AS descuento_monto,
+  so.impuesto_monto::text AS impuesto_monto,
   so.total::text AS total,
   ${atrasado} AS atrasado,
   so.entregado_en,
@@ -138,6 +164,14 @@ export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto
   fecha_entrega: toDateOnly(row.fecha_entrega),
   notas: row.notas,
   estado: row.estado,
+  descuento_tipo: row.descuento_tipo ?? null,
+  descuento_valor: String(row.descuento_valor),
+  impuesto_tipo: row.impuesto_tipo ?? null,
+  impuesto_valor: String(row.impuesto_valor),
+  costo_envio: String(row.costo_envio),
+  subtotal: String(row.subtotal),
+  descuento_monto: String(row.descuento_monto),
+  impuesto_monto: String(row.impuesto_monto),
   total: String(row.total),
   atrasado: row.atrasado === true,
   entregado_en: toIso(row.entregado_en),
@@ -256,14 +290,26 @@ const reread = async (client: Queryable, id: string, scope: Scope) => {
 
 // The DB forces new orders into 'Pendiente' and fills numero, cliente_nombre
 // and the line snapshots. All three steps share one transaction.
+// subtotal/descuento_monto/impuesto_monto/total are never written: the
+// trigger computes them. The header goes in with subtotal 0, so a fixed
+// discount is only checked against the lines at COMMIT (deferred trigger).
 export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
   withTransaction(db, async (client) => {
     const { rows } = await client.query(
       `INSERT INTO sales_orders
-         (id_own_project, id_customer, fecha, fecha_entrega, notas, created_by_user_id)
-       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6)
+         (id_own_project, id_customer, fecha, fecha_entrega, notas, created_by_user_id,
+          descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio)
+       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric)
        RETURNING id_sales_order::text AS id_sales_order`,
-      [scope.id_own_project, input.id_customer, input.fecha, input.fecha_entrega, input.notas, scope.id_user]
+      [
+        scope.id_own_project,
+        input.id_customer,
+        input.fecha,
+        input.fecha_entrega,
+        input.notas,
+        scope.id_user,
+        ...AJUSTES_COLUMNS.map((column) => input[column]),
+      ]
     );
     const id = rows[0].id_sales_order as string;
 
@@ -274,14 +320,22 @@ export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
 // Header update -> drop all lines -> insert the new ones. The DB rejects each
 // step outside 'Pendiente'/'En preparación' (PV_PEDIDO_NO_EDITABLE), which
 // rolls the whole thing back. Editing never changes the state.
-export const updateSalesOrder = (db: Db, scope: Scope, id: string, input: OrderBody) =>
+// Adjustments left out of the body (undefined) are not in the SET, so they
+// keep their current value.
+export const updateSalesOrder = (db: Db, scope: Scope, id: string, input: UpdateOrderBody) =>
   withTransaction(db, async (client) => {
+    const values: unknown[] = [input.id_customer, input.fecha, input.fecha_entrega, input.notas];
+    const ajustes = AJUSTES_COLUMNS.filter((column) => input[column] !== undefined).map((column) => {
+      values.push(input[column]);
+      return `, ${column} = $${values.length}${column.endsWith('_tipo') ? '' : '::numeric'}`;
+    });
+    const n = values.length;
     const header = await client.query(
       `UPDATE sales_orders
-       SET id_customer = $1::bigint, fecha = $2::date, fecha_entrega = $3::date, notas = $4,
-           updated_by_user_id = $5
-       WHERE id_sales_order = $6 AND id_own_project = $7 AND deleted_at IS NULL`,
-      [input.id_customer, input.fecha, input.fecha_entrega, input.notas, scope.id_user, id, scope.id_own_project]
+       SET id_customer = $1::bigint, fecha = $2::date, fecha_entrega = $3::date, notas = $4${ajustes.join('')},
+           updated_by_user_id = $${n + 1}
+       WHERE id_sales_order = $${n + 2} AND id_own_project = $${n + 3} AND deleted_at IS NULL`,
+      [...values, scope.id_user, id, scope.id_own_project]
     );
     if (!header.rowCount) throw orderNotFound();
 

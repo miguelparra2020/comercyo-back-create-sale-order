@@ -21,21 +21,59 @@ const MIGRATION_CODES = [
   'PV_PRODUCTO_ELIMINADO',
   'PV_PRODUCTO_REPETIDO',
   'PV_MAX_LINEAS',
+  // 20261017034032_sales_orders_ajustes.sql
+  'PV_DESCUENTO_EXCEDE_SUBTOTAL',
 ];
 
-// The migration lives in the DB repo next to this backend; when it is checked
-// out, also verify the list above against the real file.
-const MIGRATION_FILE = resolve(__dirname, '../../../../3 DB/supabase/migrations/20261015031310_create_sales_orders.sql');
+// CHECK constraints added by 20261017034032_sales_orders_ajustes.sql.
+const AJUSTES_CHECKS: [string, string, string][] = [
+  ['sales_orders_descuento_tipo_check', 'PV_DESCUENTO_TIPO_INVALIDO', 'El tipo de descuento debe ser porcentaje, valor o null'],
+  ['sales_orders_impuesto_tipo_check', 'PV_IMPUESTO_TIPO_INVALIDO', 'El tipo de impuesto debe ser porcentaje, valor o null'],
+  ['sales_orders_descuento_valor_check', 'PV_DESCUENTO_NEGATIVO', 'El descuento no puede ser negativo'],
+  ['sales_orders_impuesto_valor_check', 'PV_IMPUESTO_NEGATIVO', 'El impuesto no puede ser negativo'],
+  ['sales_orders_costo_envio_check', 'PV_COSTO_ENVIO_NEGATIVO', 'El costo de envío no puede ser negativo'],
+  ['sales_orders_descuento_sin_tipo_check', 'PV_DESCUENTO_SIN_TIPO', 'El descuento debe ser 0 si no se indica si es porcentaje o valor'],
+  ['sales_orders_impuesto_sin_tipo_check', 'PV_IMPUESTO_SIN_TIPO', 'El impuesto debe ser 0 si no se indica si es porcentaje o valor'],
+  ['sales_orders_descuento_porcentaje_check', 'PV_DESCUENTO_PORCENTAJE_INVALIDO', 'El descuento no puede ser mayor a 100%'],
+  ['sales_orders_impuesto_porcentaje_check', 'PV_IMPUESTO_PORCENTAJE_INVALIDO', 'El impuesto no puede ser mayor a 100%'],
+];
+
+// The migrations live in the DB repo next to this backend; when it is checked
+// out, also verify the lists above against the real files.
+const MIGRATIONS_DIR = resolve(__dirname, '../../../../3 DB/supabase/migrations');
+const MIGRATION_FILES = ['20261015031310_create_sales_orders.sql', '20261017034032_sales_orders_ajustes.sql'].map((f) =>
+  resolve(MIGRATIONS_DIR, f)
+);
+const migrationsPresent = MIGRATION_FILES.every((f) => existsSync(f));
+const migrationsSql = () => MIGRATION_FILES.map((f) => readFileSync(f, 'utf8')).join('\n');
 
 describe('PV_ERROR_STATUS', () => {
-  it('cubre exactamente los códigos de la migración', () => {
+  it('cubre exactamente los códigos de las migraciones', () => {
     expect(Object.keys(PV_ERROR_STATUS).sort()).toEqual([...MIGRATION_CODES].sort());
   });
 
-  it.runIf(existsSync(MIGRATION_FILE))('la lista coincide con los so_raise() del archivo de migración', () => {
-    const sql = readFileSync(MIGRATION_FILE, 'utf8');
-    const raised = new Set([...sql.matchAll(/so_raise\('(PV_[A-Z_]+)'/g)].map((m) => m[1]));
+  it.runIf(migrationsPresent)('la lista coincide con los so_raise() de los archivos de migración', () => {
+    const raised = new Set([...migrationsSql().matchAll(/so_raise\('(PV_[A-Z_]+)'/g)].map((m) => m[1]));
     expect([...raised].sort()).toEqual([...MIGRATION_CODES].sort());
+  });
+
+  it.runIf(migrationsPresent)('cada CHECK de ajustes mapeado existe en la migración (y no falta ninguno)', () => {
+    const sql = readFileSync(MIGRATION_FILES[1], 'utf8');
+    const added = new Set([...sql.matchAll(/add constraint (sales_orders_\w+_check)/g)].map((m) => m[1]));
+    expect([...added].sort()).toEqual(AJUSTES_CHECKS.map(([name]) => name).sort());
+  });
+
+  it('PV_DESCUENTO_EXCEDE_SUBTOTAL -> 400 con mensaje fijo, sin el código ni el número del pedido', () => {
+    const err = pvError('PV_DESCUENTO_EXCEDE_SUBTOTAL', 'El descuento no puede ser mayor al subtotal del pedido PED-0042.');
+    expect(mapSalesOrderError(err)).toEqual({
+      status: 400,
+      body: {
+        success: false,
+        error: 'Bad Request',
+        message: 'El descuento no puede ser mayor al subtotal del pedido',
+        code: 'PV_DESCUENTO_EXCEDE_SUBTOTAL',
+      },
+    });
   });
 
   it.each([
@@ -107,6 +145,13 @@ describe('mapSalesOrderError', () => {
     [pgError('22P02'), 'PV_VALIDACION', 'Uno de los valores enviados no es válido'],
   ])('respaldo %# -> 400 %s', (err, code, message) => {
     expect(mapSalesOrderError(err)).toEqual({
+      status: 400,
+      body: { success: false, error: 'Bad Request', message, code },
+    });
+  });
+
+  it.each(AJUSTES_CHECKS)('CHECK %s -> 400 %s con mensaje en español', (constraint, code, message) => {
+    expect(mapSalesOrderError(pgError('23514', constraint))).toEqual({
       status: 400,
       body: { success: false, error: 'Bad Request', message, code },
     });
