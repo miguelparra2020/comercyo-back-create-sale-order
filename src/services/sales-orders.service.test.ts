@@ -87,6 +87,7 @@ describe('toOrderDto', () => {
       entregado_en: '2026-10-17T20:30:00.000Z',
       created_at: '2026-10-15T15:00:00.000Z',
       updated_at: null,
+      factura: null,
       lineas: [
         {
           id_sales_order_line: '456',

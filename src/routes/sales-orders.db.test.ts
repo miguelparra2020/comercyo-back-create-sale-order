@@ -70,6 +70,7 @@ const connect = async () => {
 vi.mock('../config/db', () => ({ getUsersDb: () => ({ query, connect }) }));
 
 import { registerSalesOrdersRoutes } from './sales-orders.routes';
+import { registerSalesInvoicePaymentsRoutes } from './sales-invoice-payments.routes';
 import { validationHook } from '../lib/validation-hook';
 import { errorHandler } from '../lib/error-handler';
 import { mapSalesOrderError } from '../lib/pv-errors';
@@ -101,6 +102,7 @@ function buildApp(id_own_project: number) {
     await next();
   });
   registerSalesOrdersRoutes(app);
+  registerSalesInvoicePaymentsRoutes(app);
   app.onError(errorHandler);
   return app;
 }
@@ -731,6 +733,131 @@ describe('sales orders against the real database (rolled back)', () => {
         expect(err.code, set).toBe('23514');
         expect(mapSalesOrderError(err), set).toMatchObject({ status: 400, body: { code } });
       }
+    });
+  });
+
+  // Factura de venta y abonos (migraciones 20261018173425_create_sales_invoices y
+  // 20261106220000_sales_invoice_payments_como_compras): mismas reglas que la
+  // factura y los pagos de compra.
+  describe('factura de venta y abonos', () => {
+    const KEY_1 = '0b8e5f2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b';
+    const KEY_2 = '1c9f6a3b-2d4e-4f60-9bac-1d2e3f4a5b6c';
+    let hoy = '';
+
+    const facturar = (id: string, body: Record<string, unknown> = {}, app = a) =>
+      call(app, `/sales-orders/${id}/invoice`, 'POST', { fecha_emision: hoy, fecha_vencimiento: '2099-12-31', ...body });
+    const abonar = (id: string, body: Record<string, unknown>, app = a) =>
+      call(app, `/sales-orders/${id}/payments`, 'POST', { fecha: hoy, ...body });
+
+    beforeAll(async () => {
+      hoy = (await query(`SELECT fecha_bogota()::text AS hoy`)).rows[0].hoy;
+    });
+
+    it('factura el pedido: FV-xxxx, total copiado, estado Pendiente y bloquea cancelar/editar', async () => {
+      const ped = await crear({ lineas: [{ id_product: F.resma, cantidad: 2 }] });
+      const res = await facturar(ped.id_sales_order, { notas: '  A 30 días ' });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body.data.factura).toMatchObject({
+        numero: expect.stringMatching(/^FV-\d{4,}$/),
+        fecha_emision: hoy,
+        fecha_vencimiento: '2099-12-31',
+        total: '36000.00',
+        notas: 'A 30 días',
+        pagado: '0.00',
+        saldo: '36000.00',
+        estado: 'Pendiente',
+        dias_vencida: null,
+      });
+
+      const otraVez = await facturar(ped.id_sales_order);
+      expect(otraVez).toMatchObject({ status: 409, body: { code: 'FV_PEDIDO_YA_FACTURADO' } });
+
+      const cancelar = await accion(ped.id_sales_order, 'cancel');
+      expect(cancelar).toMatchObject({ status: 409, body: { code: 'FV_PEDIDO_FACTURADO' } });
+
+      const editar = await call(a, `/sales-orders/${ped.id_sales_order}`, 'PUT', pedido({ lineas: [{ id_product: F.resma, cantidad: 3 }] }));
+      expect(editar).toMatchObject({ status: 409, body: { code: 'FV_PEDIDO_FACTURADO' } });
+
+      // Avanzar de estado sí se permite y la factura sigue en la respuesta.
+      const preparar = await accion(ped.id_sales_order, 'prepare');
+      expect(preparar.status).toBe(200);
+      expect(preparar.body.data.factura.total).toBe('36000.00');
+    });
+
+    it('vencimiento anterior -> 400; pedido cancelado -> 409; otro proyecto -> 404', async () => {
+      const ped = await crear();
+      expect(await facturar(ped.id_sales_order, { fecha_vencimiento: '2000-01-01' })).toMatchObject({
+        status: 400,
+        body: { code: 'FV_FACTURA_VENCIMIENTO_ANTERIOR' },
+      });
+      expect(await facturar(ped.id_sales_order, {}, b)).toMatchObject({ status: 404, body: { code: 'PV_PEDIDO_NO_ENCONTRADO' } });
+      await accion(ped.id_sales_order, 'cancel');
+      expect(await facturar(ped.id_sales_order)).toMatchObject({ status: 409, body: { code: 'FV_PEDIDO_CANCELADO' } });
+    });
+
+    it('abonos: parcial, total, reglas de la BD, anular y cartera en el pedido', async () => {
+      const ped = await crear({ lineas: [{ id_product: F.resma, cantidad: 1 }] }); // 18000
+      const id = ped.id_sales_order;
+
+      expect(await call(a, `/sales-orders/${id}/payments`)).toMatchObject({ status: 409, body: { code: 'FV_PEDIDO_NO_FACTURADO' } });
+      await facturar(id);
+
+      const vacio = await call(a, `/sales-orders/${id}/payments`);
+      expect(vacio.body.data).toEqual({ pagos: [], resumen: { total: '18000.00', pagado: '0', saldo: '18000.00', estado: 'Pendiente' } });
+
+      const efectivo = await abonar(id, { metodo: 'Efectivo', monto: 5000, referencia: ' Recibo 1 ' });
+      expect(efectivo.status, JSON.stringify(efectivo.body)).toBe(201);
+      expect(efectivo.body.data.resumen).toEqual({ total: '18000.00', pagado: '5000.00', saldo: '13000.00', estado: 'Pago parcial' });
+      expect(efectivo.body.data.pagos[0]).toMatchObject({ metodo: 'Efectivo', monto: '5000.00', referencia: 'Recibo 1', comprobante_key: null, anulado_en: null });
+
+      // La cartera se lee del pedido: pagado y saldo de la factura.
+      const leido = await call(a, `/sales-orders/${id}`);
+      expect(leido.body.data.factura).toMatchObject({ pagado: '5000.00', saldo: '13000.00', estado: 'Pendiente' });
+
+      expect(await abonar(id, { metodo: 'Transferencia', monto: 100 })).toMatchObject({ status: 400, body: { code: 'FV_PAGO_COMPROBANTE_REQUERIDO' } });
+      expect(await abonar(id, { metodo: 'Efectivo', monto: 13000.01 })).toMatchObject({ status: 409, body: { code: 'FV_PAGO_EXCEDE_SALDO' } });
+      expect(await abonar(id, { metodo: 'Efectivo', monto: 1, fecha: '2099-01-01' })).toMatchObject({ status: 400, body: { code: 'FV_PAGO_FECHA_FUTURA' } });
+      expect(await abonar(id, { metodo: 'Efectivo', monto: 1, fecha: '2000-01-01' })).toMatchObject({ status: 400, body: { code: 'FV_PAGO_FECHA_ANTERIOR' } });
+      expect(await abonar(id, { metodo: 'Efectivo', monto: 1 }, b)).toMatchObject({ status: 404, body: { code: 'PV_PEDIDO_NO_ENCONTRADO' } });
+
+      const transferencia = await abonar(id, { metodo: 'Transferencia', monto: 13000, comprobanteKey: KEY_1.toUpperCase() });
+      expect(transferencia.status, JSON.stringify(transferencia.body)).toBe(201);
+      expect(transferencia.body.data.resumen).toMatchObject({ pagado: '18000.00', saldo: '0.00', estado: 'Pagada' });
+      expect((await call(a, `/sales-orders/${id}`)).body.data.factura.estado).toBe('Pagada');
+
+      // Una foto respalda un solo abono, también en otra factura.
+      const otro = await crear();
+      await facturar(otro.id_sales_order);
+      expect(await abonar(otro.id_sales_order, { metodo: 'Transferencia', monto: 1, comprobanteKey: KEY_1 })).toMatchObject({
+        status: 409,
+        body: { code: 'FV_PAGO_COMPROBANTE_EN_USO' },
+      });
+
+      // Anular: deja de contar y libera el saldo; no se anula dos veces.
+      const pagos = transferencia.body.data.pagos as { id_sales_invoice_payment: string; metodo: string }[];
+      // Orden por fecha e id numérico: el efectivo (primero) va antes que la transferencia.
+      expect(pagos.map((pago) => pago.metodo)).toEqual(['Efectivo', 'Transferencia']);
+      const idPago = pagos[1].id_sales_invoice_payment;
+      expect(await call(a, `/sales-orders/${id}/payments/${idPago}/void`, 'POST', { motivo: '  ' })).toMatchObject({
+        status: 400,
+        body: { code: 'FV_PAGO_MOTIVO_REQUERIDO' },
+      });
+      const anulado = await call(a, `/sales-orders/${id}/payments/${idPago}/void`, 'POST', { motivo: 'Transferencia rechazada' });
+      expect(anulado.status, JSON.stringify(anulado.body)).toBe(200);
+      expect(anulado.body.data.resumen).toMatchObject({ pagado: '5000.00', saldo: '13000.00', estado: 'Pago parcial' });
+      expect(anulado.body.data.pagos[1]).toMatchObject({ motivo_anulacion: 'Transferencia rechazada', anulado_en: expect.any(String) });
+      expect(await call(a, `/sales-orders/${id}/payments/${idPago}/void`, 'POST', { motivo: 'otra vez' })).toMatchObject({
+        status: 409,
+        body: { code: 'FV_PAGO_YA_ANULADO' },
+      });
+      expect(await call(a, `/sales-orders/${otro.id_sales_order}/payments/${idPago}/void`, 'POST', { motivo: 'x' })).toMatchObject({
+        status: 404,
+        body: { code: 'FV_PAGO_NO_ENCONTRADO' },
+      });
+
+      // El saldo liberado se puede volver a abonar (con otra foto).
+      const reabono = await abonar(id, { metodo: 'Transferencia', monto: 13000, comprobanteKey: KEY_2 });
+      expect(reabono.body.data.resumen.estado).toBe('Pagada');
     });
   });
 });

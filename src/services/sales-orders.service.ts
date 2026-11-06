@@ -5,6 +5,7 @@ import { withTransaction } from '../lib/transaction';
 import {
   AJUSTES_COLUMNS,
   type Estado,
+  type InvoiceBody,
   type ListQuery,
   type OrderBody,
   type OrderLineInput,
@@ -40,6 +41,27 @@ export type SalesOrderLineDto = {
   subtotal: string;
 };
 
+// Estado de cobro de la factura: lo calcula v_sales_invoices con la fecha de
+// Bogotá (Anulada no aparece aquí: solo se lee la factura vigente).
+export type EstadoFactura = 'Pendiente' | 'Vencida' | 'Pagada';
+
+// Factura de venta vigente del pedido (a lo sumo una: sales_invoices_pedido_uniq).
+// Misma forma que la factura de compra en comercyo-back-create-purchase-order:
+// pagado = suma de los abonos vigentes (sales_invoices.abonado, lo mantiene la BD).
+export type SalesInvoiceDto = {
+  id_sales_invoice: string;
+  numero: string;
+  fecha_emision: string;
+  fecha_vencimiento: string;
+  total: string;
+  notas: string;
+  created_at: string;
+  pagado: string;
+  saldo: string;
+  estado: EstadoFactura;
+  dias_vencida: number | null;
+};
+
 export type SalesOrderDto = {
   id_sales_order: string;
   id_own_project: number;
@@ -65,6 +87,7 @@ export type SalesOrderDto = {
   entregado_en: string | null;
   created_at: string;
   updated_at: string | null;
+  factura: SalesInvoiceDto | null;
   lineas: SalesOrderLineDto[];
 };
 
@@ -104,7 +127,26 @@ const orderColumns = (atrasado: string) => `
 // Same definition as v_sales_orders.atrasado, for reads off the base table.
 const ATRASADO_EXPRESSION = `(so.estado IN ('Pendiente', 'En preparación', 'En camino') AND so.fecha_entrega < current_date)`;
 
-const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado')} FROM v_sales_orders so`;
+// Factura vigente (no anulada) del pedido, desde v_sales_invoices: saldo,
+// estado (Pendiente / Vencida / Pagada) y dias_vencida ya vienen calculados
+// con fecha_bogota(). Sin factura -> todas las columnas factura_* en null.
+const FACTURA_COLUMNS = `
+  vi.id_sales_invoice::text AS factura_id,
+  vi.numero AS factura_numero,
+  to_char(vi.fecha_emision, 'YYYY-MM-DD') AS factura_fecha_emision,
+  to_char(vi.fecha_vencimiento, 'YYYY-MM-DD') AS factura_fecha_vencimiento,
+  vi.total::text AS factura_total,
+  vi.notas AS factura_notas,
+  vi.created_at AS factura_created_at,
+  vi.abonado::text AS factura_pagado,
+  greatest(vi.saldo, 0)::text AS factura_saldo,
+  vi.estado AS factura_estado,
+  vi.dias_vencida AS factura_dias_vencida
+`;
+
+const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado')}, ${FACTURA_COLUMNS}
+  FROM v_sales_orders so
+  LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL`;
 
 const LINE_COLUMNS = `
   id_sales_order::text AS id_sales_order,
@@ -152,6 +194,24 @@ export const toLineDto = (row: any): SalesOrderLineDto => ({
   subtotal: String(row.subtotal),
 });
 
+// factura_* come from the LEFT JOIN in SELECT_ORDER_FROM_VIEW; absent or null -> no invoice.
+export const toInvoiceDto = (row: any): SalesInvoiceDto | null =>
+  row.factura_id
+    ? {
+        id_sales_invoice: String(row.factura_id),
+        numero: row.factura_numero,
+        fecha_emision: toDateOnly(row.factura_fecha_emision),
+        fecha_vencimiento: toDateOnly(row.factura_fecha_vencimiento),
+        total: String(row.factura_total),
+        notas: row.factura_notas ?? '',
+        created_at: toIso(row.factura_created_at) as string,
+        pagado: String(row.factura_pagado ?? '0'),
+        saldo: String(row.factura_saldo ?? row.factura_total),
+        estado: row.factura_estado,
+        dias_vencida: row.factura_dias_vencida === null || row.factura_dias_vencida === undefined ? null : Number(row.factura_dias_vencida),
+      }
+    : null;
+
 // id_own_project is a number (as in purchase orders); id_customer is a
 // string (as comercyo-back-create-customers returns it).
 export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto => ({
@@ -177,6 +237,7 @@ export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto
   entregado_en: toIso(row.entregado_en),
   created_at: toIso(row.created_at),
   updated_at: toIso(row.updated_at),
+  factura: toInvoiceDto(row),
   lineas,
 });
 
@@ -354,6 +415,28 @@ export const transitionSalesOrder = (db: Db, scope: Scope, id: string, accion: T
       [TRANSICIONES[accion], scope.id_user, id, scope.id_own_project]
     );
     if (!result.rowCount) throw orderNotFound();
+    return reread(client, id, scope);
+  });
+
+// Emite la factura de venta del pedido. El INSERT es todo lo que hace la API:
+// trg_fv_10_insert bloquea el pedido (FOR SHARE), lo valida (FV_PEDIDO_CANCELADO,
+// FV_PEDIDO_YA_FACTURADO, FV_PEDIDO_SIN_TOTAL...) y fija numero (FV-0001 por
+// proyecto), cliente y total copiados del pedido. Desde ese momento la BD bloquea
+// cancelar, eliminar o cambiar cliente/líneas/ajustes del pedido (FV_PEDIDO_FACTURADO);
+// avanzar de estado sí se permite.
+export const invoiceSalesOrder = (db: Db, scope: Scope, id: string, input: InvoiceBody) =>
+  withTransaction(db, async (client) => {
+    const exists = await client.query(
+      `SELECT 1 FROM sales_orders WHERE id_sales_order = $1 AND id_own_project = $2 AND deleted_at IS NULL`,
+      [id, scope.id_own_project]
+    );
+    if (!exists.rowCount) throw orderNotFound();
+    await client.query(
+      `INSERT INTO sales_invoices
+         (id_own_project, id_sales_order, fecha_emision, fecha_vencimiento, notas, created_by_user_id)
+       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6)`,
+      [scope.id_own_project, id, input.fecha_emision, input.fecha_vencimiento, input.notas, scope.id_user]
+    );
     return reread(client, id, scope);
   });
 

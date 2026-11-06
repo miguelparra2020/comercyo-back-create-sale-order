@@ -111,9 +111,9 @@ const P = {
   updateHeader: /UPDATE sales_orders\s+SET id_customer/,
   deleteLines: /DELETE FROM sales_order_lines/,
   softDelete: /UPDATE sales_orders so SET deleted_at/,
-  detail: /FROM v_sales_orders so WHERE so\.id_sales_order = \$1/,
+  detail: /FROM v_sales_orders so[\s\S]*?WHERE so\.id_sales_order = \$1/,
   count: /SELECT count\(\*\)::int AS total FROM v_sales_orders/,
-  page: /FROM v_sales_orders so WHERE[\s\S]*ORDER BY/,
+  page: /FROM v_sales_orders so[\s\S]*WHERE[\s\S]*ORDER BY/,
   lines: /FROM sales_order_lines\s+WHERE id_sales_order = ANY/,
 };
 
@@ -465,6 +465,7 @@ describe('serialización', () => {
       entregado_en: '2026-10-17T20:30:00.000Z',
       created_at: '2026-10-15T15:00:00.000Z',
       updated_at: '2026-10-17T20:30:00.000Z',
+      factura: null,
       lineas: [
         { id_sales_order_line: '456', id_product: '789', producto_nombre: 'Resma carta', referencia: 'RES-CARTA', cantidad: 2, precio_unitario: '18000.00', subtotal: '36000.00' },
         { id_sales_order_line: '457', id_product: '790', producto_nombre: 'Lapicero', referencia: 'LAP-01', cantidad: 1, precio_unitario: '15000.00', subtotal: '15000.00' },

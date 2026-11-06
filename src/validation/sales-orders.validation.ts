@@ -343,11 +343,150 @@ export const ListQuerySchema = z
 
 export type ListQuery = z.output<typeof ListQuerySchema>;
 
+// --------------------------------------------------------------------------
+// Factura de venta del pedido (POST /sales-orders/:id/invoice) y sus abonos
+// (POST /sales-orders/:id/payments, .../payments/:idPago/void). Mismas reglas y
+// textos que la factura y los pagos de compra (comercyo-back-create-purchase-order).
+// La BD controla el resto: numero FV-0001, cliente y total copiados del pedido
+// (sales_invoices), el saldo y el rango de fechas de los abonos
+// (FV_PAGO_EXCEDE_SALDO, FV_PAGO_FECHA_*): migraciones
+// 20261018173425_create_sales_invoices y 20261106220000_sales_invoice_payments_como_compras.
+// --------------------------------------------------------------------------
+
+export const MSG_VENCIMIENTO_ANTERIOR = 'La fecha de vencimiento no puede ser anterior a la fecha de la factura';
+
+export const InvoiceBodySchema = z
+  .object(
+    {
+      fecha_emision: dateField(
+        'La fecha de la factura es obligatoria',
+        'La fecha de la factura debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-11-06' }),
+      fecha_vencimiento: dateField(
+        'La fecha de vencimiento es obligatoria',
+        'La fecha de vencimiento debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-12-06', description: 'Igual o posterior a fecha_emision' }),
+      notas: z
+        .string({ error: MSG.notasTexto })
+        .trim()
+        .max(NOTAS_MAX, MSG.notasMax)
+        .nullish()
+        .transform((value) => value ?? '')
+        .openapi({ example: 'Pago a 30 días' }),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((body, ctx) => {
+    if (isValidDate(body.fecha_emision) && isValidDate(body.fecha_vencimiento) && body.fecha_vencimiento < body.fecha_emision) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['fecha_vencimiento'],
+        message: MSG_VENCIMIENTO_ANTERIOR,
+        params: { code: 'FV_FACTURA_VENCIMIENTO_ANTERIOR' },
+      });
+    }
+  });
+
+export type InvoiceBody = z.output<typeof InvoiceBodySchema>;
+
+export const METODOS_PAGO = ['Transferencia', 'Efectivo'] as const;
+export type MetodoPago = (typeof METODOS_PAGO)[number];
+
+export const REFERENCIA_PAGO_MAX = 120;
+export const MOTIVO_ANULACION_MAX = 500;
+
+export const MSG_PAGO = {
+  metodo: 'El método de pago debe ser Transferencia o Efectivo',
+  monto: 'El monto debe ser un número mayor que 0',
+  montoPositivo: 'El monto debe ser mayor que 0',
+  montoDecimales: 'El monto debe tener máximo 2 decimales',
+  montoMax: `El monto debe ser como máximo ${PRECIO_MAX}`,
+  referencia: `La referencia debe tener máximo ${REFERENCIA_PAGO_MAX} caracteres`,
+  motivo: 'Indica el motivo de la anulación',
+  motivoMax: `El motivo debe tener máximo ${MOTIVO_ANULACION_MAX} caracteres`,
+  comprobante: 'Los abonos por transferencia requieren la foto del comprobante',
+  comprobanteInvalido: 'El comprobante debe ser un UUID válido',
+  comprobanteEnUso: 'Esta foto ya respalda otro abono',
+} as const;
+
+export const PaymentBodySchema = z
+  .object(
+    {
+      fecha: dateField(
+        'La fecha del abono es obligatoria',
+        'La fecha del abono debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-11-06', description: 'Entre la fecha de la factura y hoy' }),
+      metodo: z.enum(METODOS_PAGO, { error: MSG_PAGO.metodo }).openapi({ example: 'Transferencia' }),
+      monto: z
+        .number({ error: MSG_PAGO.monto })
+        .positive(MSG_PAGO.montoPositivo)
+        .max(PRECIO_MAX, MSG_PAGO.montoMax)
+        .refine(hasAtMostTwoDecimals, MSG_PAGO.montoDecimales)
+        .openapi({ example: 50000, description: 'No puede superar el saldo de la factura' }),
+      referencia: z
+        .string({ error: 'La referencia debe ser texto' })
+        .trim()
+        .max(REFERENCIA_PAGO_MAX, MSG_PAGO.referencia)
+        .nullish()
+        .transform((value) => value ?? '')
+        .openapi({ example: 'Transferencia #88213' }),
+      comprobanteKey: z
+        .string({ error: MSG_PAGO.comprobanteInvalido })
+        .toLowerCase()
+        .pipe(z.uuid(MSG_PAGO.comprobanteInvalido))
+        .nullish()
+        .transform((value) => value ?? null)
+        .openapi({
+          example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301',
+          description: 'Key (UUID) de la foto del comprobante; obligatoria si el método es Transferencia',
+        }),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((pago, ctx) => {
+    if (pago.metodo === 'Transferencia' && pago.comprobanteKey === null) {
+      ctx.addIssue({
+        code: 'custom',
+        message: MSG_PAGO.comprobante,
+        path: ['comprobanteKey'],
+        params: { code: 'FV_PAGO_COMPROBANTE_REQUERIDO' },
+      });
+    }
+  });
+
+export type PaymentBody = z.output<typeof PaymentBodySchema>;
+
+export const VoidPaymentBodySchema = z.object(
+  {
+    motivo: z
+      .any()
+      .superRefine((value, ctx) => {
+        if (typeof value !== 'string' || value.trim() === '') {
+          ctx.addIssue({ code: 'custom', message: MSG_PAGO.motivo, params: { code: 'FV_PAGO_MOTIVO_REQUERIDO' } });
+        } else if (value.trim().length > MOTIVO_ANULACION_MAX) {
+          ctx.addIssue({ code: 'custom', message: MSG_PAGO.motivoMax });
+        }
+      })
+      .transform((value) => (value as string).trim())
+      .openapi({ type: 'string', example: 'Abono duplicado' }),
+  },
+  BODY_NOT_OBJECT
+);
+
+export type VoidPaymentBody = z.output<typeof VoidPaymentBodySchema>;
+
 export const IdParamSchema = z.object({
   id: z
     .string()
     .refine(isPositiveBigintId, 'El id debe ser un entero positivo')
     .openapi({ param: { name: 'id', in: 'path' }, example: '123' }),
+});
+
+export const PaymentIdParamSchema = IdParamSchema.extend({
+  idPago: z
+    .string()
+    .refine(isPositiveBigintId, 'El id del abono debe ser un entero positivo')
+    .openapi({ param: { name: 'idPago', in: 'path' }, example: '9' }),
 });
 
 // First zod issue as a Spanish message; issues inside a line are prefixed
