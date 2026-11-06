@@ -10,6 +10,7 @@ import {
   ESTADOS,
   formatIssue,
   IdParamSchema,
+  InvoiceBodySchema,
   issueCode,
   ListQuerySchema,
   OrderBodySchema,
@@ -18,7 +19,7 @@ import {
 } from '../validation/sales-orders.validation';
 
 type Vars = AuthVariables & OwnProjectVariables;
-type Ctx = Context<{ Variables: Vars }>;
+export type Ctx = Context<{ Variables: Vars }>;
 
 // --------------------------------------------------------------------------
 // OpenAPI response schemas
@@ -44,6 +45,24 @@ const LineaResponseSchema = z
     subtotal: z.string().openapi({ example: '36000.00' }),
   })
   .openapi('SalesOrderLine');
+
+const FacturaSchema = z
+  .object({
+    id_sales_invoice: z.string().openapi({ example: '55' }),
+    numero: z.string().openapi({ example: 'FV-0001' }),
+    fecha_emision: z.string().openapi({ example: '2026-11-06' }),
+    fecha_vencimiento: z.string().openapi({ example: '2026-12-06' }),
+    total: z.string().openapi({ example: '62621.00', description: 'Copiado del total del pedido al facturar.' }),
+    notas: z.string(),
+    created_at: z.string(),
+    pagado: z.string().openapi({ example: '20000.00', description: 'Suma de los abonos vigentes.' }),
+    saldo: z.string().openapi({ example: '42621.00', description: 'max(total - pagado, 0).' }),
+    estado: z.enum(['Pendiente', 'Vencida', 'Pagada']).openapi({
+      description: 'Calculado con la fecha de Bogotá: Pagada si saldo 0; Vencida si venció con saldo; si no, Pendiente.',
+    }),
+    dias_vencida: z.number().nullable().openapi({ example: null }),
+  })
+  .openapi('SalesInvoice');
 
 const SalesOrderSchema = z
   .object({
@@ -84,6 +103,9 @@ const SalesOrderSchema = z
     entregado_en: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string().nullable(),
+    factura: FacturaSchema.nullable().openapi({
+      description: 'Factura de venta vigente (no anulada) del pedido, o null si no está facturado.',
+    }),
     lineas: z.array(LineaResponseSchema),
   })
   .openapi('SalesOrder');
@@ -104,16 +126,16 @@ const SalesOrderListResponseSchema = z.object({
   }),
 });
 
-const json = (schema: any) => ({ content: { 'application/json': { schema } } });
+export const json = (schema: any) => ({ content: { 'application/json': { schema } } });
 
-const errorResponses = {
+export const errorResponses = {
   400: { description: 'Datos inválidos o falta x-own-project-id', ...json(ErrorSchema) },
   401: { description: 'No autenticado', ...json(ErrorSchema) },
   404: { description: 'Pedido no encontrado en este proyecto', ...json(ErrorSchema) },
   409: { description: 'El estado del pedido no permite la operación', ...json(ErrorSchema) },
 };
 
-const common = {
+export const common = {
   tags: ['Sales orders'],
   security: [{ Bearer: [], OwnProjectId: [] }],
 };
@@ -132,21 +154,21 @@ const parseJson = async (c: Context) => {
 
 const badRequest = (c: Context, message: string) => c.json(errorBody(400, VALIDATION_CODE, message), 400);
 
-const scopeOf = (c: Ctx): service.Scope => ({
+export const scopeOf = (c: Ctx): service.Scope => ({
   id_own_project: c.get('id_own_project'),
   id_user: c.get('id_user'),
 });
 
 // Known business errors -> 4xx; anything else bubbles up to app.onError,
 // which logs it and answers a generic 500.
-const respondError = (c: Context, err: unknown) => {
+export const respondError = (c: Context, err: unknown) => {
   const mapped = mapSalesOrderError(err);
   if (!mapped) throw err;
   return c.json(mapped.body, mapped.status);
 };
 
 // Validates the POST/PUT body. Returns the parsed input or the error response.
-const parseOrderBody = async <T>(c: Context, schema: { safeParse: (value: unknown) => z.ZodSafeParseResult<T> }) => {
+export const parseOrderBody = async <T>(c: Context, schema: { safeParse: (value: unknown) => z.ZodSafeParseResult<T> }) => {
   const parsed = schema.safeParse(await parseJson(c));
   if (!parsed.success) {
     const { issues } = parsed.error;
@@ -247,6 +269,25 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
       },
     });
 
+  const invoiceRoute = createRoute({
+    ...common,
+    method: 'post',
+    path: '/sales-orders/{id}/invoice',
+    summary: 'Facturar el pedido: crea su factura de venta (FV-0001...)',
+    description: [
+      'La BD numera la factura por proyecto y copia el cliente y el total del pedido (con descuento, impuesto y envío).',
+      'Desde ese momento el pedido no se puede cancelar, eliminar ni cambiar de cliente, líneas o ajustes',
+      '(409 FV_PEDIDO_FACTURADO); sí puede avanzar de estado.',
+      'Errores: 409 FV_PEDIDO_CANCELADO, 409 FV_PEDIDO_YA_FACTURADO, 409 FV_PEDIDO_SIN_TOTAL,',
+      '400 FV_FACTURA_VENCIMIENTO_ANTERIOR, 404 PV_PEDIDO_NO_ENCONTRADO.',
+    ].join('\n'),
+    request: { params: IdParamSchema, body: { ...json(InvoiceBodySchema), required: true } },
+    responses: {
+      200: { description: 'Pedido con su factura', ...json(SalesOrderResponseSchema) },
+      ...errorResponses,
+    },
+  });
+
   const deleteRoute = createRoute({
     ...common,
     method: 'delete',
@@ -307,6 +348,17 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
       }
     });
   }
+
+  apiV1.openapi(invoiceRoute, async (c: Ctx) => {
+    const { input, response } = await parseOrderBody(c, InvoiceBodySchema);
+    if (response) return response;
+    try {
+      const data = await service.invoiceSalesOrder(getUsersDb(), scopeOf(c), c.req.param('id'), input);
+      return c.json({ success: true, data }, 200);
+    } catch (err) {
+      return respondError(c, err);
+    }
+  });
 
   apiV1.openapi(deleteRoute, async (c: Ctx) => {
     try {

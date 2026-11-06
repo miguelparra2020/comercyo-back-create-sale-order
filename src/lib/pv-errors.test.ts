@@ -25,6 +25,42 @@ const MIGRATION_CODES = [
   'PV_DESCUENTO_EXCEDE_SUBTOTAL',
 ];
 
+// Every code raised by fv_raise() in 20261018173425_create_sales_invoices.sql and
+// 20261106220000_sales_invoice_payments_como_compras.sql (the old abono codes the
+// second migration removed - FV_ABONO_INMUTABLE, FV_COMPROBANTE_OTRO_PROYECTO -
+// are left out on purpose: nothing raises them any more).
+const FV_MIGRATION_CODES = [
+  'FV_PEDIDO_NO_ENCONTRADO',
+  'FV_PEDIDO_OTRO_PROYECTO',
+  'FV_PEDIDO_ELIMINADO',
+  'FV_PEDIDO_CANCELADO',
+  'FV_PEDIDO_YA_FACTURADO',
+  'FV_PEDIDO_SIN_TOTAL',
+  'FV_PEDIDO_FACTURADO',
+  'FV_CAMPO_INMUTABLE',
+  'FV_FACTURA_ANULADA',
+  'FV_ANULACION_INVALIDA',
+  'FV_ANULAR_CON_ABONOS',
+  'FV_BORRADO_NO_PERMITIDO',
+  'FV_ABONOS_EXCEDEN_TOTAL',
+  'FV_PAGO_FACTURA_NO_ENCONTRADA',
+  'FV_PAGO_COMPROBANTE_REQUERIDO',
+  'FV_PAGO_FECHA_ANTERIOR',
+  'FV_PAGO_FECHA_FUTURA',
+  'FV_PAGO_EXCEDE_SALDO',
+  'FV_PAGO_YA_ANULADO',
+  'FV_PAGO_MOTIVO_REQUERIDO',
+  'FV_PAGO_INMUTABLE',
+];
+
+// FV_* codes the API raises itself or maps from a constraint (no fv_raise()).
+const FV_API_CODES = [
+  'FV_FACTURA_NO_ENCONTRADA',
+  'FV_FACTURA_OTRO_PROYECTO',
+  'FV_PAGO_NO_ENCONTRADO',
+  'FV_PAGO_COMPROBANTE_EN_USO',
+];
+
 // CHECK constraints added by 20261017034032_sales_orders_ajustes.sql.
 const AJUSTES_CHECKS: [string, string, string][] = [
   ['sales_orders_descuento_tipo_check', 'PV_DESCUENTO_TIPO_INVALIDO', 'El tipo de descuento debe ser porcentaje, valor o null'],
@@ -46,10 +82,26 @@ const MIGRATION_FILES = ['20261015031310_create_sales_orders.sql', '202610170340
 );
 const migrationsPresent = MIGRATION_FILES.every((f) => existsSync(f));
 const migrationsSql = () => MIGRATION_FILES.map((f) => readFileSync(f, 'utf8')).join('\n');
+const FV_MIGRATION_FILES = [
+  '20261018173425_create_sales_invoices.sql',
+  '20261106220000_sales_invoice_payments_como_compras.sql',
+].map((f) => resolve(MIGRATIONS_DIR, f));
+const fvMigrationsPresent = FV_MIGRATION_FILES.every((f) => existsSync(f));
 
 describe('PV_ERROR_STATUS', () => {
   it('cubre exactamente los códigos de las migraciones', () => {
-    expect(Object.keys(PV_ERROR_STATUS).sort()).toEqual([...MIGRATION_CODES].sort());
+    expect(Object.keys(PV_ERROR_STATUS).sort()).toEqual(
+      [...MIGRATION_CODES, ...FV_MIGRATION_CODES, ...FV_API_CODES].sort()
+    );
+  });
+
+  it.runIf(fvMigrationsPresent)('cada fv_raise() de las migraciones vigentes tiene su código mapeado', () => {
+    const sql = FV_MIGRATION_FILES.map((f) => readFileSync(f, 'utf8')).join('\n');
+    const raised = new Set([...sql.matchAll(/fv_raise\('(FV_[A-Z_]+)'/g)].map((m) => m[1]));
+    const retired = ['FV_ABONO_INMUTABLE', 'FV_COMPROBANTE_OTRO_PROYECTO', 'FV_FACTURA_NO_ENCONTRADA', 'FV_FACTURA_OTRO_PROYECTO'];
+    for (const code of raised) {
+      if (!retired.includes(code)) expect(FV_MIGRATION_CODES).toContain(code);
+    }
   });
 
   it.runIf(migrationsPresent)('la lista coincide con los so_raise() de los archivos de migración', () => {

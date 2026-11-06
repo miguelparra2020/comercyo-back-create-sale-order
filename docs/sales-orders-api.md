@@ -10,6 +10,8 @@ Base: `/api/v1` · Swagger UI: `/api/v1/doc` · OpenAPI: `/api/v1/openapi.json`
 Base de datos: `supabase-tiendas`, migraciones `20261015031310_create_sales_orders`
 (tablas `sales_orders`, `sales_order_lines`, `sales_order_counters`, vista `v_sales_orders`)
 y `20261017034032_sales_orders_ajustes` (descuento, impuesto y envío a nivel de pedido).
+La factura de venta y sus abonos usan `20261018173425_create_sales_invoices` y
+`20261106220000_sales_invoice_payments_como_compras` (ver «Factura de venta y cartera»).
 Las tablas tienen RLS sin políticas: solo este backend las lee y escribe, por conexión directa.
 
 ## Autenticación y alcance
@@ -307,6 +309,78 @@ Transición no permitida → 409:
   "code": "PV_TRANSICION_INVALIDA"
 }
 ```
+
+## Factura de venta y cartera (abonos)
+
+Requiere las migraciones `20261018173425_create_sales_invoices` (tablas `sales_invoices`,
+`sales_invoice_payments`, vista `v_sales_invoices`) y
+`20261106220000_sales_invoice_payments_como_compras` (abonos con las reglas de los pagos de compra).
+**Orden de despliegue:** migración `20261106220000` → este backend → frontend.
+
+Mismo funcionamiento que la factura y los pagos de compra (`comercyo-back-create-purchase-order`):
+
+- Cada pedido trae `factura`: `null` si no está facturado; si lo está, la factura **vigente**
+  (no anulada) leída de `v_sales_invoices`:
+  `{ "id_sales_invoice": "55", "numero": "FV-0001", "fecha_emision": "2026-11-06",
+  "fecha_vencimiento": "2026-12-06", "total": "62621.00", "notas": "", "created_at": "...",
+  "pagado": "20000.00", "saldo": "42621.00", "estado": "Pendiente", "dias_vencida": null }`.
+  `estado` lo calcula la BD con la fecha de Bogotá: `Pagada` (saldo 0), `Vencida` (venció con saldo)
+  o `Pendiente`. La **cartera** son los pedidos con `factura.saldo > 0` (y `Vencida` las vencidas).
+- Con factura vigente el pedido **no** se puede cancelar, eliminar ni cambiar de cliente, líneas o
+  ajustes → 409 `FV_PEDIDO_FACTURADO`. Sí puede avanzar de estado.
+
+### POST /sales-orders/:id/invoice
+
+```json
+{ "fecha_emision": "2026-11-06", "fecha_vencimiento": "2026-12-06", "notas": "Pago a 30 días" }
+```
+
+| Campo               | Regla |
+| ------------------- | ----- |
+| `fecha_emision`     | obligatoria, `YYYY-MM-DD` válida |
+| `fecha_vencimiento` | obligatoria, ≥ `fecha_emision` (400 `FV_FACTURA_VENCIMIENTO_ANTERIOR`) |
+| `notas`             | opcional, ≤ 500 (se recorta) |
+
+La BD numera `FV-0001`, `FV-0002`… por proyecto y copia el cliente y el total del pedido (con
+descuento, impuesto y envío). `200 { success: true, data: <pedido con factura> }`. Errores:
+409 `FV_PEDIDO_CANCELADO`, 409 `FV_PEDIDO_YA_FACTURADO` (también si llegan dos a la vez),
+409 `FV_PEDIDO_SIN_TOTAL`, 404 `PV_PEDIDO_NO_ENCONTRADO`.
+
+### Abonos
+
+Un abono no se edita ni se borra; si se registró mal se **anula** con un motivo: sigue en la lista
+y deja de contar. La BD bloquea la factura (`FOR UPDATE`) para que dos abonos simultáneos no superen
+el total. En los tres endpoints: 404 `PV_PEDIDO_NO_ENCONTRADO` y 409 `FV_PEDIDO_NO_FACTURADO`.
+Todos responden:
+
+```json
+{
+  "success": true,
+  "data": {
+    "pagos": [
+      { "id_sales_invoice_payment": "9", "fecha": "2026-11-06", "metodo": "Transferencia",
+        "monto": "20000.00", "referencia": "T-1", "created_at": "2026-11-06T15:00:00.000Z",
+        "anulado_en": null, "motivo_anulacion": null,
+        "comprobante_key": "3f2504e0-4f89-41d3-9a0c-0305e82c3301" }
+    ],
+    "resumen": { "total": "62621.00", "pagado": "20000.00", "saldo": "42621.00", "estado": "Pago parcial" }
+  }
+}
+```
+
+`pagos` va por fecha e id (numérico) e incluye los anulados. `resumen` solo cuenta los vigentes;
+`estado`: `Pendiente` (nada abonado), `Pago parcial` o `Pagada`.
+
+- **GET /sales-orders/:id/payments**: abonos y resumen.
+- **POST /sales-orders/:id/payments → 201**:
+  `{ "fecha": "2026-11-06", "metodo": "Transferencia", "monto": 20000, "referencia": "T-1", "comprobanteKey": "<uuid>" }`.
+  `fecha` entre la emisión de la factura y hoy en Bogotá (400 `FV_PAGO_FECHA_ANTERIOR` / `FV_PAGO_FECHA_FUTURA`);
+  `metodo` `Transferencia` o `Efectivo`; `monto` > 0, 2 decimales, ≤ saldo (409 `FV_PAGO_EXCEDE_SALDO`);
+  `referencia` opcional ≤ 120; `comprobanteKey` (UUID de la foto subida a
+  `comercyo-back-payments-purchase-order`, ruta `/sales-orders/:id/payments`) obligatorio con
+  Transferencia (400 `FV_PAGO_COMPROBANTE_REQUERIDO`); una foto respalda un solo abono (409 `FV_PAGO_COMPROBANTE_EN_USO`).
+- **POST /sales-orders/:id/payments/:idPago/void → 200**: `{ "motivo": "Abono duplicado" }`.
+  `motivo` obligatorio (400 `FV_PAGO_MOTIVO_REQUERIDO`); 404 `FV_PAGO_NO_ENCONTRADO`; 409 `FV_PAGO_YA_ANULADO`.
 
 ## DELETE /sales-orders/:id
 
