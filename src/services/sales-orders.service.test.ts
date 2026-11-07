@@ -60,6 +60,7 @@ describe('toOrderDto', () => {
           cantidad: '2',
           precio_unitario: '18000.00',
           subtotal: '36000.00',
+          costo_unitario: '12000.00',
         }),
       ]
     );
@@ -97,6 +98,7 @@ describe('toOrderDto', () => {
           cantidad: 2,
           precio_unitario: '18000.00',
           subtotal: '36000.00',
+          costo_unitario: '12000.00',
         },
       ],
     });

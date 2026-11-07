@@ -42,6 +42,10 @@ const LineaResponseSchema = z
     referencia: z.string().openapi({ example: 'RES-CARTA' }),
     cantidad: z.number().openapi({ example: 2 }),
     precio_unitario: z.string().openapi({ example: '18000.00' }),
+    costo_unitario: z.string().openapi({
+      example: '12000.00',
+      description: 'Solo lectura: costo del producto cuando se agregó la línea (la BD lo toma de productos.precio_costo; no cambia si después cambia el costo).',
+    }),
     subtotal: z.string().openapi({ example: '36000.00' }),
   })
   .openapi('SalesOrderLine');
