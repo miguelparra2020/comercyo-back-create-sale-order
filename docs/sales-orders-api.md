@@ -342,11 +342,18 @@ Mismo funcionamiento que la factura y los pagos de compra (`comercyo-back-create
 | `fecha_emision`     | obligatoria, `YYYY-MM-DD` válida |
 | `fecha_vencimiento` | obligatoria, ≥ `fecha_emision` (400 `FV_FACTURA_VENCIMIENTO_ANTERIOR`) |
 | `notas`             | opcional, ≤ 500 (se recorta) |
+| `descuenta_inventario` | opcional, booleano, por defecto `true` |
+
+**Inventario** (migración `20261107150000_sales_invoices_descuenta_inventario`): con
+`descuenta_inventario: true` la BD resta del stock las cantidades del pedido en el mismo INSERT. Si
+algún producto no tiene stock suficiente, no se crea la factura: 409 `FV_STOCK_INSUFICIENTE` con el
+producto, lo que hay y lo que pide el pedido. Con `false` no toca el inventario. Si la factura se
+anula, el stock descontado vuelve. Nada más en ventas mueve el stock (ni entregar).
 
 La BD numera `FV-0001`, `FV-0002`… por proyecto y copia el cliente y el total del pedido (con
 descuento, impuesto y envío). `200 { success: true, data: <pedido con factura> }`. Errores:
 409 `FV_PEDIDO_CANCELADO`, 409 `FV_PEDIDO_YA_FACTURADO` (también si llegan dos a la vez),
-409 `FV_PEDIDO_SIN_TOTAL`, 404 `PV_PEDIDO_NO_ENCONTRADO`.
+409 `FV_PEDIDO_SIN_TOTAL`, 409 `FV_STOCK_INSUFICIENTE`, 404 `PV_PEDIDO_NO_ENCONTRADO`.
 
 ### Abonos
 

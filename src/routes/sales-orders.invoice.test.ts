@@ -129,7 +129,17 @@ describe('POST /sales-orders/:id/invoice', () => {
       'COMMIT',
     ]);
     // Solo lo que envía la API: numero, cliente y total los pone la BD.
-    expect(db.find(P.insertInvoice)!.params).toEqual([ID_OWN_PROJECT, ORDER_ID, '2026-11-06', '2026-12-06', 'Pago a 30 días', ID_USER]);
+    // descuenta_inventario no viene en el body: por defecto true.
+    expect(db.find(P.insertInvoice)!.params).toEqual([ID_OWN_PROJECT, ORDER_ID, '2026-11-06', '2026-12-06', 'Pago a 30 días', true, ID_USER]);
+  });
+
+  it('descuenta_inventario: false se envía tal cual; si no es booleano -> 400', async () => {
+    const ok = await send(url, 'POST', { fecha_emision: '2026-11-06', fecha_vencimiento: '2026-12-06', descuenta_inventario: false });
+    expect(ok.status).toBe(200);
+    expect(db.find(P.insertInvoice)!.params[5]).toBe(false);
+
+    const mal = await send(url, 'POST', { fecha_emision: '2026-11-06', fecha_vencimiento: '2026-12-06', descuenta_inventario: 'si' });
+    expect(mal.status).toBe(400);
   });
 
   it('notas es opcional (se guarda vacío)', async () => {
@@ -173,6 +183,7 @@ describe('POST /sales-orders/:id/invoice', () => {
     ['FV_PEDIDO_CANCELADO', 409],
     ['FV_PEDIDO_YA_FACTURADO', 409],
     ['FV_PEDIDO_SIN_TOTAL', 409],
+    ['FV_STOCK_INSUFICIENTE', 409],
     ['FV_PEDIDO_ELIMINADO', 404],
   ])('la BD lanza %s -> %i con rollback', async (code, status) => {
     db.on(P.insertInvoice, () => {
