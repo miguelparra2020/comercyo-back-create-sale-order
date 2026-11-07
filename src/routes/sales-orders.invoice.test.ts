@@ -117,6 +117,7 @@ describe('POST /sales-orders/:id/invoice', () => {
       created_at: '2026-11-06T15:00:00.000Z',
       pagado: '20000.00',
       reintegrado: '0',
+      gastos: '0',
       saldo: '31000.00',
       estado: 'Pendiente',
       dias_vencida: null,

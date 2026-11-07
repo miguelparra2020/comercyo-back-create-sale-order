@@ -72,6 +72,7 @@ vi.mock('../config/db', () => ({ getUsersDb: () => ({ query, connect }) }));
 import { registerSalesOrdersRoutes } from './sales-orders.routes';
 import { registerSalesInvoicePaymentsRoutes } from './sales-invoice-payments.routes';
 import { registerSalesReturnsRoutes } from './sales-returns.routes';
+import { registerSalesExpensesRoutes } from './sales-expenses.routes';
 import { validationHook } from '../lib/validation-hook';
 import { errorHandler } from '../lib/error-handler';
 import { mapSalesOrderError } from '../lib/pv-errors';
@@ -105,6 +106,7 @@ function buildApp(id_own_project: number) {
   registerSalesOrdersRoutes(app);
   registerSalesInvoicePaymentsRoutes(app);
   registerSalesReturnsRoutes(app);
+  registerSalesExpensesRoutes(app);
   app.onError(errorHandler);
   return app;
 }
@@ -838,6 +840,75 @@ describe('sales orders against the real database (rolled back)', () => {
       const pagada = await call(a, `/sales-orders/${ped.id_sales_order}`);
       expect(pagada.body.data.factura).toMatchObject({ estado: 'Pagada', saldo: '0.00', dias_vencida: null });
       await query('UPDATE productos SET stock = 1000 WHERE id_product = $1', [F.cuaderno]);
+    });
+
+    it('vendedores y gastos: comisión sobre la ganancia al final, sobre la venta y fija; baja la ganancia', async () => {
+      const ped = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 2 }] });
+      const venta = Number(ped.subtotal) - Number(ped.descuento_monto ?? 0);
+      const costo = 2 * Number(ped.lineas[0].costo_unitario);
+      const ganancia = venta - costo;
+      expect((await facturar(ped.id_sales_order)).status).toBe(200);
+      const url = `/sales-orders/${ped.id_sales_order}/expenses`;
+
+      const ana = await call(a, '/sellers', 'POST', { nombre: '  Ana Vendedora Qz ', modo_comision: 'Ganancia', valor_comision: 50 });
+      expect(ana.status, JSON.stringify(ana.body)).toBe(201);
+      expect(ana.body.data).toMatchObject({ nombre: 'Ana Vendedora Qz', modo_comision: 'Ganancia', valor_comision: '50.00', activo: true, comisiones: '0', ventas: 0 });
+      const dup = await call(a, '/sellers', 'POST', { nombre: 'ana vendedora qz' });
+      expect(dup).toMatchObject({ status: 409, body: { code: 'PV_VENDEDOR_DUPLICADO' } });
+      const pct = await call(a, '/sellers', 'POST', { nombre: 'Pct Qz', modo_comision: 'Venta', valor_comision: 101 });
+      expect(pct).toMatchObject({ status: 400, body: { code: 'PV_VALIDACION' } });
+      const beto = await call(a, '/sellers', 'POST', { nombre: 'Beto Vendedor Qz', modo_comision: 'Fijo', valor_comision: 5000 });
+      const idAna = ana.body.data.id_seller;
+      const idBeto = beto.body.data.id_seller;
+
+      const comision = await call(a, url, 'POST', { tipo: 'Comisión', fecha: hoy, id_seller: Number(idAna), modo_comision: 'Ganancia', porcentaje: 50 });
+      expect(comision.status, JSON.stringify(comision.body)).toBe(201);
+      expect(comision.body.data.gastos[0]).toMatchObject({ tipo: 'Comisión', vendedor_nombre: 'Ana Vendedora Qz', porcentaje: '50.00', valor: Math.round(ganancia / 2).toFixed(2) });
+
+      const envio = await call(a, url, 'POST', { tipo: 'Envío', descripcion: 'Domicilio', fecha: hoy, valor: 2000 });
+      expect(envio.status).toBe(201);
+      const conEnvio = envio.body.data;
+      expect(conEnvio.gastos.find((g: any) => g.tipo === 'Comisión').valor).toBe(Math.round((ganancia - 2000) / 2).toFixed(2));
+
+      const fija = await call(a, url, 'POST', { tipo: 'Comisión', fecha: hoy, id_seller: Number(idBeto), modo_comision: 'Fijo', valor: 5000 });
+      expect(fija.status).toBe(201);
+      const comisiones = Math.round((ganancia - 2000) / 2) + 5000;
+      expect(fija.body.data.resumen).toEqual({
+        venta: venta.toFixed(2),
+        costo: costo.toFixed(2),
+        ganancia_bruta: ganancia.toFixed(2),
+        comisiones: comisiones.toFixed(2),
+        otros_gastos: '2000.00',
+        gastos: (comisiones + 2000).toFixed(2),
+        ganancia_neta: (ganancia - comisiones - 2000).toFixed(2),
+      });
+
+      const repetida = await call(a, url, 'POST', { tipo: 'Comisión', fecha: hoy, id_seller: Number(idAna), modo_comision: 'Fijo', valor: 1 });
+      expect(repetida).toMatchObject({ status: 409, body: { code: 'FV_GASTO_VENDEDOR_REPETIDO' } });
+      const sinVendedor = await call(a, url, 'POST', { tipo: 'Comisión', fecha: hoy, modo_comision: 'Ganancia', porcentaje: 10 });
+      expect(sinVendedor).toMatchObject({ status: 400, body: { code: 'PV_VALIDACION' } });
+      const futura = await call(a, url, 'POST', { tipo: 'Preparación', fecha: '2099-01-01', valor: 100 });
+      expect(futura).toMatchObject({ status: 400, body: { code: 'FV_GASTO_FECHA_INVALIDA' } });
+
+      // El pedido trae el total de gastos para la ganancia neta.
+      const got = await call(a, `/sales-orders/${ped.id_sales_order}`);
+      expect(got.body.data.factura.gastos).toBe((comisiones + 2000).toFixed(2));
+
+      // Borrar el envío recalcula la comisión sobre la ganancia.
+      const idEnvio = conEnvio.gastos.find((g: any) => g.tipo === 'Envío').id_sales_invoice_expense;
+      const borrado = await call(a, `${url}/${idEnvio}`, 'DELETE');
+      expect(borrado.status).toBe(200);
+      expect(borrado.body.data.gastos.find((g: any) => g.id_seller === idAna).valor).toBe(Math.round(ganancia / 2).toFixed(2));
+      expect(await call(a, `${url}/${idEnvio}`, 'DELETE')).toMatchObject({ status: 404, body: { code: 'FV_GASTO_NO_ENCONTRADO' } });
+
+      // Lista de vendedores con lo ganado; desactivar; otro proyecto no los ve.
+      const lista = await call(a, '/sellers');
+      expect(lista.body.data.find((v: any) => v.id_seller === idBeto)).toMatchObject({ comisiones: '5000.00', ventas: 1 });
+      const inactivo = await call(a, `/sellers/${idBeto}`, 'PUT', { nombre: 'Beto Vendedor Qz', modo_comision: 'Fijo', valor_comision: 5000, activo: false });
+      expect(inactivo.body.data.activo).toBe(false);
+      expect((await call(b, '/sellers')).body.data.some((v: any) => v.id_seller === idAna)).toBe(false);
+      expect(await call(b, `/sellers/${idAna}`, 'PUT', { nombre: 'X' })).toMatchObject({ status: 404, body: { code: 'PV_VENDEDOR_NO_ENCONTRADO' } });
+      expect(await call(b, url)).toMatchObject({ status: 404, body: { code: 'PV_PEDIDO_NO_ENCONTRADO' } });
     });
 
     it('factura el pedido: FV-xxxx, total copiado, estado Pendiente y bloquea cancelar/editar', async () => {

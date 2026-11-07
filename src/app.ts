@@ -10,6 +10,7 @@ import { rateLimiter } from './middlewares/rate-limit.middleware';
 import { registerSalesOrdersRoutes } from './routes/sales-orders.routes';
 import { registerSalesInvoicePaymentsRoutes } from './routes/sales-invoice-payments.routes';
 import { registerSalesReturnsRoutes } from './routes/sales-returns.routes';
+import { registerSalesExpensesRoutes } from './routes/sales-expenses.routes';
 import { validationHook } from './lib/validation-hook';
 import { errorHandler } from './lib/error-handler';
 
@@ -89,10 +90,15 @@ apiV1.get('/doc', swaggerUI({ url: '/api/v1/openapi.json' }));
 apiV1.use('/sales-orders/*', rateLimiter({ windowMs: 60_000, max: 100 }));
 apiV1.use('/sales-orders/*', requireAuth());
 apiV1.use('/sales-orders/*', requireOwnProject());
+// Vendedores del proyecto (comisiones en los gastos de la factura de venta).
+apiV1.use('/sellers/*', rateLimiter({ windowMs: 60_000, max: 100 }));
+apiV1.use('/sellers/*', requireAuth());
+apiV1.use('/sellers/*', requireOwnProject());
 
 registerSalesOrdersRoutes(apiV1);
 registerSalesInvoicePaymentsRoutes(apiV1);
 registerSalesReturnsRoutes(apiV1);
+registerSalesExpensesRoutes(apiV1);
 
 app.route('/api/v1', apiV1);
 
