@@ -427,7 +427,9 @@ export const transitionSalesOrder = (db: Db, scope: Scope, id: string, accion: T
 // FV_PEDIDO_YA_FACTURADO, FV_PEDIDO_SIN_TOTAL...) y fija numero (FV-0001 por
 // proyecto), cliente y total copiados del pedido. Desde ese momento la BD bloquea
 // cancelar, eliminar o cambiar cliente/líneas/ajustes del pedido (FV_PEDIDO_FACTURADO);
-// avanzar de estado sí se permite.
+// avanzar de estado sí se permite. Con descuenta_inventario (por defecto) la BD
+// resta del stock lo del pedido en el mismo INSERT (FV_STOCK_INSUFICIENTE si no
+// alcanza: no se crea la factura).
 export const invoiceSalesOrder = (db: Db, scope: Scope, id: string, input: InvoiceBody) =>
   withTransaction(db, async (client) => {
     const exists = await client.query(
@@ -437,9 +439,9 @@ export const invoiceSalesOrder = (db: Db, scope: Scope, id: string, input: Invoi
     if (!exists.rowCount) throw orderNotFound();
     await client.query(
       `INSERT INTO sales_invoices
-         (id_own_project, id_sales_order, fecha_emision, fecha_vencimiento, notas, created_by_user_id)
-       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6)`,
-      [scope.id_own_project, id, input.fecha_emision, input.fecha_vencimiento, input.notas, scope.id_user]
+         (id_own_project, id_sales_order, fecha_emision, fecha_vencimiento, notas, descuenta_inventario, created_by_user_id)
+       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7)`,
+      [scope.id_own_project, id, input.fecha_emision, input.fecha_vencimiento, input.notas, input.descuenta_inventario, scope.id_user]
     );
     return reread(client, id, scope);
   });

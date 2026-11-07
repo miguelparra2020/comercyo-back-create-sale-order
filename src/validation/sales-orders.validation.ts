@@ -373,6 +373,15 @@ export const InvoiceBodySchema = z
         .nullish()
         .transform((value) => value ?? '')
         .openapi({ example: 'Pago a 30 días' }),
+      descuenta_inventario: z
+        .boolean({ error: 'descuenta_inventario debe ser verdadero o falso' })
+        .nullish()
+        .transform((value) => value ?? true)
+        .openapi({
+          example: true,
+          description:
+            'Por defecto true: la factura resta del stock las cantidades del pedido (FV_STOCK_INSUFICIENTE si no alcanza; vuelven si se anula). false: no toca el inventario.',
+        }),
     },
     BODY_NOT_OBJECT
   )

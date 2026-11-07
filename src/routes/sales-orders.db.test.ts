@@ -182,7 +182,7 @@ describe('sales orders against the real database (rolled back)', () => {
           `INSERT INTO productos
              (id_own_project, nombre, sku, precio_costo, precio_venta_linea, precio_venta_fisico, stock,
               id_category, etiquetas, id_warehouse, id_sales_point, descripcion)
-           SELECT $1, $2, $3, 1000, $4, $4, 0, id_category, etiquetas, id_warehouse, id_sales_point, descripcion
+           SELECT $1, $2, $3, 1000, $4, $4, 1000, id_category, etiquetas, id_warehouse, id_sales_point, descripcion
            FROM productos WHERE id_product = $5
            RETURNING id_product::text AS id`,
           [project, nombre, sku, precio, template.rows[0].id_product]
@@ -767,6 +767,26 @@ describe('sales orders against the real database (rolled back)', () => {
 
     beforeAll(async () => {
       hoy = (await query(`SELECT fecha_bogota()::text AS hoy`)).rows[0].hoy;
+    });
+
+    it('facturar descuenta el inventario por defecto; sin stock -> 409; sin descontar no lo toca', async () => {
+      const stock = async () => Number((await query('SELECT stock FROM productos WHERE id_product = $1', [F.cuaderno])).rows[0].stock);
+      await query('UPDATE productos SET stock = 5 WHERE id_product = $1', [F.cuaderno]);
+
+      const ped = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 3 }] });
+      expect((await facturar(ped.id_sales_order)).status).toBe(200);
+      expect(await stock()).toBe(2);
+
+      const grande = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 4 }] });
+      const sinStock = await facturar(grande.id_sales_order);
+      expect(sinStock).toMatchObject({ status: 409, body: { code: 'FV_STOCK_INSUFICIENTE' } });
+      expect(sinStock.body.message).toContain('hay 2 y el pedido tiene 4');
+      expect(await stock()).toBe(2);
+
+      const sinDescontar = await facturar(grande.id_sales_order, { descuenta_inventario: false });
+      expect(sinDescontar.status).toBe(200);
+      expect(await stock()).toBe(2);
+      await query('UPDATE productos SET stock = 1000 WHERE id_product = $1', [F.cuaderno]);
     });
 
     it('factura el pedido: FV-xxxx, total copiado, estado Pendiente y bloquea cancelar/editar', async () => {

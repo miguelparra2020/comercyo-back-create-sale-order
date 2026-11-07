@@ -71,6 +71,8 @@ export const PV_ERROR_STATUS: Record<string, PvErrorStatus> = {
   FV_PEDIDO_CANCELADO: 409,
   FV_PEDIDO_YA_FACTURADO: 409,
   FV_PEDIDO_SIN_TOTAL: 409,
+  // Facturar descontando inventario sin stock suficiente de algún producto.
+  FV_STOCK_INSUFICIENTE: 409,
   // Cancelar, eliminar o cambiar cliente/líneas/ajustes de un pedido facturado.
   FV_PEDIDO_FACTURADO: 409,
   FV_CAMPO_INMUTABLE: 409,
