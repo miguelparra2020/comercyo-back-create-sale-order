@@ -30,7 +30,9 @@ export type SalesInvoicePaymentDto = {
   comprobante_key: string | null;
 };
 
-export type PaymentsSummaryDto = { total: string; pagado: string; saldo: string; estado: EstadoPago };
+// reintegrado: dinero devuelto al cliente por devoluciones (sales_returns
+// resueltas como 'Reintegro'); baja el saldo como una nota crédito.
+export type PaymentsSummaryDto = { total: string; pagado: string; reintegrado: string; saldo: string; estado: EstadoPago };
 
 export type PaymentsResponseDto = { pagos: SalesInvoicePaymentDto[]; resumen: PaymentsSummaryDto };
 
@@ -40,7 +42,8 @@ const toIso = (value: unknown): string | null => {
 };
 
 // La factura vigente del pedido (a lo sumo una: sales_invoices_pedido_uniq).
-const findInvoiceId = async (q: Queryable, idOwnProject: number, idOrder: string): Promise<string> => {
+// También la usan las devoluciones (sales-returns.service).
+export const findInvoiceId = async (q: Queryable, idOwnProject: number, idOrder: string): Promise<string> => {
   const { rows } = await q.query(
     `SELECT si.id_sales_invoice::text AS id_sales_invoice
        FROM sales_orders so
@@ -84,19 +87,23 @@ const readPayments = async (q: Queryable, idInvoice: string): Promise<PaymentsRe
   const resumen = await q.query(
     `SELECT si.total::text AS total,
             s.pagado::text AS pagado,
-            greatest(si.total - s.pagado, 0)::text AS saldo,
-            CASE WHEN s.pagado = 0 THEN 'Pendiente'
-                 WHEN si.total - s.pagado <= 0 THEN 'Pagada'
+            r.reintegrado::text AS reintegrado,
+            greatest(si.total - s.pagado - r.reintegrado, 0)::text AS saldo,
+            CASE WHEN s.pagado = 0 AND r.reintegrado = 0 THEN 'Pendiente'
+                 WHEN si.total - s.pagado - r.reintegrado <= 0 THEN 'Pagada'
                  ELSE 'Pago parcial' END AS estado
        FROM sales_invoices si,
             LATERAL (SELECT coalesce(sum(p.monto) FILTER (WHERE anulado_en IS NULL), 0) AS pagado
                        FROM sales_invoice_payments p
-                      WHERE p.id_sales_invoice = si.id_sales_invoice) s
+                      WHERE p.id_sales_invoice = si.id_sales_invoice) s,
+            LATERAL (SELECT coalesce(sum(d.monto_reintegro) FILTER (WHERE d.resolucion = 'Reintegro'), 0) AS reintegrado
+                       FROM sales_returns d
+                      WHERE d.id_sales_invoice = si.id_sales_invoice) r
       WHERE si.id_sales_invoice = $1::bigint`,
     [idInvoice]
   );
-  const { total, pagado, saldo, estado } = resumen.rows[0];
-  return { pagos: pagos.rows.map(toPaymentDto), resumen: { total, pagado, saldo, estado } };
+  const { total, pagado, reintegrado, saldo, estado } = resumen.rows[0];
+  return { pagos: pagos.rows.map(toPaymentDto), resumen: { total, pagado, reintegrado, saldo, estado } };
 };
 
 export const listPayments = async (db: Db, idOwnProject: number, idOrder: string) =>

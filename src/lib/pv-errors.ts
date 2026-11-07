@@ -38,6 +38,7 @@ export const NOT_INVOICED_CODE = 'FV_PEDIDO_NO_FACTURADO';
 export const orderNotInvoiced = () =>
   new SalesOrderError(409, NOT_INVOICED_CODE, 'El pedido de venta no está facturado');
 export const paymentNotFound = () => new SalesOrderError(404, 'FV_PAGO_NO_ENCONTRADO', 'Abono no encontrado');
+export const returnNotFound = () => new SalesOrderError(404, 'FV_DEV_NO_ENCONTRADA', 'Devolución no encontrada');
 
 // Every code raised by so_raise() in migrations 20261015031310_create_sales_orders
 // and 20261017034032_sales_orders_ajustes. Keep in sync with their headers.
@@ -93,6 +94,16 @@ export const PV_ERROR_STATUS: Record<string, PvErrorStatus> = {
   FV_PAGO_MOTIVO_REQUERIDO: 400,
   FV_PAGO_COMPROBANTE_REQUERIDO: 400,
   FV_PAGO_COMPROBANTE_EN_USO: 409,
+  // Devoluciones del cliente (20261107180000_devoluciones_compra_venta)
+  FV_DEV_FACTURA_NO_ENCONTRADA: 404,
+  FV_DEV_FECHA_INVALIDA: 400,
+  FV_DEV_YA_RESUELTA: 409,
+  FV_DEV_INMUTABLE: 409,
+  FV_DEV_REINTEGRO_EXCEDE: 409,
+  FV_DEV_STOCK_INSUFICIENTE: 409,
+  FV_DEV_PRODUCTO_NO_FACTURADO: 400,
+  FV_DEV_CANTIDAD_EXCEDE: 409,
+  FV_ANULAR_CON_DEVOLUCIONES: 409,
 };
 
 const PV_MESSAGE_REGEX = /^((?:PV|FV)_[A-Z_]+):\s*([\s\S]*)$/;

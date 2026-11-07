@@ -59,6 +59,8 @@ export type SalesInvoiceDto = {
   notas: string;
   created_at: string;
   pagado: string;
+  // Dinero devuelto al cliente por devoluciones: baja el saldo (nota crédito).
+  reintegrado: string;
   saldo: string;
   estado: EstadoFactura;
   dias_vencida: number | null;
@@ -141,14 +143,20 @@ const FACTURA_COLUMNS = `
   vi.notas AS factura_notas,
   vi.created_at AS factura_created_at,
   vi.abonado::text AS factura_pagado,
-  greatest(vi.saldo, 0)::text AS factura_saldo,
-  vi.estado AS factura_estado,
-  vi.dias_vencida AS factura_dias_vencida
+  dev.reintegrado::text AS factura_reintegrado,
+  greatest(vi.total - vi.abonado - dev.reintegrado, 0)::text AS factura_saldo,
+  CASE WHEN vi.abonado + dev.reintegrado >= vi.total THEN 'Pagada' ELSE vi.estado END AS factura_estado,
+  CASE WHEN vi.abonado + dev.reintegrado >= vi.total THEN NULL ELSE vi.dias_vencida END AS factura_dias_vencida
 `;
 
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado')}, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
-  LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL`;
+  LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL
+  LEFT JOIN LATERAL (
+    -- Reintegros de devoluciones: con ellos la factura puede quedar pagada sin abonos completos.
+    SELECT coalesce(sum(d.monto_reintegro) FILTER (WHERE d.resolucion = 'Reintegro'), 0) AS reintegrado
+      FROM sales_returns d WHERE d.id_sales_invoice = vi.id_sales_invoice
+  ) dev ON vi.id_sales_invoice IS NOT NULL`;
 
 const LINE_COLUMNS = `
   id_sales_order::text AS id_sales_order,
@@ -210,6 +218,7 @@ export const toInvoiceDto = (row: any): SalesInvoiceDto | null =>
         notas: row.factura_notas ?? '',
         created_at: toIso(row.factura_created_at) as string,
         pagado: String(row.factura_pagado ?? '0'),
+        reintegrado: String(row.factura_reintegrado ?? '0'),
         saldo: String(row.factura_saldo ?? row.factura_total),
         estado: row.factura_estado,
         dias_vencida: row.factura_dias_vencida === null || row.factura_dias_vencida === undefined ? null : Number(row.factura_dias_vencida),

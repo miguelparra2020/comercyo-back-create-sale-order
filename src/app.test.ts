@@ -36,6 +36,8 @@ const SALES_ORDER_PATHS = [
   '/sales-orders/{id}/invoice',
   '/sales-orders/{id}/payments',
   '/sales-orders/{id}/payments/{idPago}/void',
+  '/sales-orders/{id}/returns',
+  '/sales-orders/{id}/returns/{idDev}/resolve',
 ];
 
 const validBody = (overrides: Record<string, unknown> = {}) => ({

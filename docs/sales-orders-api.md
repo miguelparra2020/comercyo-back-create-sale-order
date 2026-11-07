@@ -355,6 +355,31 @@ descuento, impuesto y envío). `200 { success: true, data: <pedido con factura> 
 409 `FV_PEDIDO_CANCELADO`, 409 `FV_PEDIDO_YA_FACTURADO` (también si llegan dos a la vez),
 409 `FV_PEDIDO_SIN_TOTAL`, 409 `FV_STOCK_INSUFICIENTE`, 404 `PV_PEDIDO_NO_ENCONTRADO`.
 
+### Devoluciones del cliente
+
+Requiere la migración `20261107180000_devoluciones_compra_venta`. Van sobre la factura vigente del
+pedido (409 `FV_PEDIDO_NO_FACTURADO` si no tiene). Las tres rutas responden
+`{ success: true, data: { devoluciones: [...], resumen: { devuelto, reintegrado, por_resolver } } }`.
+Cada devolución trae `numero` (DV-0001 por proyecto), `fecha`, `motivo`, `mueve_inventario`, `valor`
+(Σ cantidad × precio del pedido), `resolucion` (`null` | `Reposición` | `Reintegro`), `resuelta_fecha`,
+`metodo`, `monto_reintegro`, `referencia` y `lineas` (`id_product`, `producto_nombre`, `cantidad`,
+`precio_unitario`, `subtotal`).
+
+- **Inventario:** la devolución suma al stock lo devuelto (si la factura descontó inventario; si no,
+  `mueve_inventario: false`). `Reposición` (se le vuelve a entregar) lo resta: 409
+  `FV_DEV_STOCK_INSUFICIENTE` si no alcanza.
+- **Saldo:** los reintegros bajan el saldo (`factura.reintegrado`; `resumen.reintegrado` en los abonos):
+  saldo = total − abonos − reintegros; un abono no puede superarlo. Con reintegros la factura puede
+  quedar `Pagada`.
+- No se edita ni se borra; se resuelve una vez. Una factura con devoluciones no se puede anular
+  (`FV_ANULAR_CON_DEVOLUCIONES`).
+
+`GET /sales-orders/:id/returns` · `POST /sales-orders/:id/returns` → 201
+`{ "fecha", "motivo", "lineas": [{ "id_product", "cantidad" }] }` (409 `FV_DEV_CANTIDAD_EXCEDE`, 400
+`FV_DEV_PRODUCTO_NO_FACTURADO`, 400 `FV_DEV_FECHA_INVALIDA`) · `POST /sales-orders/:id/returns/:idDev/resolve`
+`{ "resolucion": "Reposición" | "Reintegro", "fecha", "metodo"?, "monto"?, "referencia"? }` (409
+`FV_DEV_YA_RESUELTA`, 409 `FV_DEV_REINTEGRO_EXCEDE`, 409 `FV_DEV_STOCK_INSUFICIENTE`, 404 `FV_DEV_NO_ENCONTRADA`).
+
 ### Abonos
 
 Un abono no se edita ni se borra; si se registró mal se **anula** con un motivo: sigue en la lista
