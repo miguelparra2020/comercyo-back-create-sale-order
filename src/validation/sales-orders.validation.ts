@@ -655,7 +655,13 @@ export const MSG_GASTO = {
   modo: 'La comisión requiere el modo: Ganancia, Venta o Fijo',
   porcentaje: 'El porcentaje debe ser mayor a 0 y máximo 100',
   valor: 'El valor del gasto debe ser mayor a 0',
+  comprobante: 'El comprobante debe ser la key (UUID) de la foto subida',
 } as const;
+
+const comprobanteGasto = z
+  .string({ error: MSG_GASTO.comprobante })
+  .toLowerCase()
+  .pipe(z.uuid(MSG_GASTO.comprobante));
 
 const valorPesos = (message: string) =>
   z
@@ -740,6 +746,10 @@ export const ExpenseBodySchema = z
         .nullish()
         .transform((v) => v ?? null)
         .openapi({ example: 15000, description: 'Gastos y comisión Fijo; en % lo calcula la BD' }),
+      comprobante_key: comprobanteGasto
+        .nullish()
+        .transform((v) => v ?? null)
+        .openapi({ example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301', description: 'Opcional: key de la foto subida a comercyo-back-payments-purchase-order' }),
     },
     BODY_NOT_OBJECT
   )
@@ -756,6 +766,13 @@ export const ExpenseBodySchema = z
   });
 
 export type ExpenseBody = z.output<typeof ExpenseBodySchema>;
+
+export const ExpenseReceiptBodySchema = z.object(
+  { comprobante_key: comprobanteGasto.openapi({ example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }) },
+  BODY_NOT_OBJECT
+);
+
+export type ExpenseReceiptBody = z.output<typeof ExpenseReceiptBodySchema>;
 
 export const ExpenseIdParamSchema = IdParamSchema.extend({
   idGasto: z

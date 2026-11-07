@@ -911,6 +911,32 @@ describe('sales orders against the real database (rolled back)', () => {
       expect(await call(b, url)).toMatchObject({ status: 404, body: { code: 'PV_PEDIDO_NO_ENCONTRADO' } });
     });
 
+    it('comprobante opcional del gasto: al registrar o adjuntado después, una sola vez y sin repetir', async () => {
+      const ped = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 1 }] });
+      expect((await facturar(ped.id_sales_order)).status).toBe(200);
+      const url = `/sales-orders/${ped.id_sales_order}/expenses`;
+      const K1 = '7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+      const K2 = '8b2c3d4e-5f60-4b7c-9d8e-0f1a2b3c4d5e';
+
+      const conFoto = await call(a, url, 'POST', { tipo: 'Envío', fecha: hoy, valor: 1000, comprobante_key: K1.toUpperCase() });
+      expect(conFoto.status, JSON.stringify(conFoto.body)).toBe(201);
+      expect(conFoto.body.data.gastos[0].comprobante_key).toBe(K1);
+      const repetida = await call(a, url, 'POST', { tipo: 'Otro', fecha: hoy, valor: 500, comprobante_key: K1 });
+      expect(repetida).toMatchObject({ status: 409, body: { code: 'FV_GASTO_COMPROBANTE_EN_USO' } });
+      const invalida = await call(a, url, 'POST', { tipo: 'Otro', fecha: hoy, valor: 500, comprobante_key: 'foto.jpg' });
+      expect(invalida).toMatchObject({ status: 400, body: { code: 'PV_VALIDACION' } });
+
+      const sinFoto = await call(a, url, 'POST', { tipo: 'Preparación', fecha: hoy, valor: 800 });
+      const prep = sinFoto.body.data.gastos.find((g: any) => g.tipo === 'Preparación');
+      expect(prep.comprobante_key).toBeNull();
+      const adjunta = await call(a, `${url}/${prep.id_sales_invoice_expense}/receipt`, 'PUT', { comprobante_key: K2 });
+      expect(adjunta.status, JSON.stringify(adjunta.body)).toBe(200);
+      expect(adjunta.body.data.gastos.find((g: any) => g.tipo === 'Preparación').comprobante_key).toBe(K2);
+      const otraVez = await call(a, `${url}/${prep.id_sales_invoice_expense}/receipt`, 'PUT', { comprobante_key: K1 });
+      expect(otraVez).toMatchObject({ status: 409, body: { code: 'FV_GASTO_CON_COMPROBANTE' } });
+      expect(await call(a, `${url}/999999999/receipt`, 'PUT', { comprobante_key: K1 })).toMatchObject({ status: 404, body: { code: 'FV_GASTO_NO_ENCONTRADO' } });
+    });
+
     it('factura el pedido: FV-xxxx, total copiado, estado Pendiente y bloquea cancelar/editar', async () => {
       const ped = await crear({ lineas: [{ id_product: F.resma, cantidad: 2 }] });
       const res = await facturar(ped.id_sales_order, { notas: '  A 30 días ' });

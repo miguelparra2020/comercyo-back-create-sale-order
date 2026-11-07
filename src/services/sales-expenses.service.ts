@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
-import { expenseNotFound, sellerNotFound } from '../lib/pv-errors';
+import { expenseHasReceipt, expenseNotFound, sellerNotFound } from '../lib/pv-errors';
 import { withTransaction } from '../lib/transaction';
-import type { ExpenseBody, ModoComision, SellerBody, TipoGasto } from '../validation/sales-orders.validation';
+import type { ExpenseBody, ExpenseReceiptBody, ModoComision, SellerBody, TipoGasto } from '../validation/sales-orders.validation';
 import { findInvoiceId } from './sales-invoice-payments.service';
 import type { Scope } from './sales-orders.service';
 
@@ -39,6 +39,8 @@ export type SalesExpenseDto = {
   modo_comision: ModoComision | null;
   porcentaje: string | null;
   valor: string;
+  // Foto opcional del comprobante (bucket de comercyo-back-payments-purchase-order).
+  comprobante_key: string | null;
   created_at: string;
 };
 
@@ -129,7 +131,8 @@ const readExpenses = async (q: Queryable, idInvoice: string): Promise<ExpensesRe
   const gastos = await q.query(
     `SELECT g.id_sales_invoice_expense::text AS id_sales_invoice_expense, g.tipo, g.descripcion,
             to_char(g.fecha, 'YYYY-MM-DD') AS fecha, g.id_seller::text AS id_seller, s.nombre AS vendedor_nombre,
-            g.modo_comision, g.porcentaje::text AS porcentaje, g.valor::text AS valor, g.created_at
+            g.modo_comision, g.porcentaje::text AS porcentaje, g.valor::text AS valor,
+            g.comprobante_key::text AS comprobante_key, g.created_at
        FROM sales_invoice_expenses g
        LEFT JOIN sales_sellers s ON s.id_seller = g.id_seller
       WHERE g.id_sales_invoice = $1::bigint
@@ -166,6 +169,7 @@ const readExpenses = async (q: Queryable, idInvoice: string): Promise<ExpensesRe
       modo_comision: r.modo_comision ?? null,
       porcentaje: r.porcentaje ?? null,
       valor: r.valor,
+      comprobante_key: r.comprobante_key ?? null,
       created_at: toIso(r.created_at),
     })),
     resumen: resumen.rows[0],
@@ -184,8 +188,8 @@ export const createExpense = (db: Db, scope: Scope, idOrder: string, input: Expe
     const valor = porcentaje !== null ? 0 : input.valor;
     await client.query(
       `INSERT INTO sales_invoice_expenses
-         (id_own_project, id_sales_invoice, tipo, descripcion, fecha, id_seller, modo_comision, porcentaje, valor, created_by_user_id)
-       VALUES ($1, $2::bigint, $3, $4, $5::date, $6::bigint, $7, $8, $9, $10)`,
+         (id_own_project, id_sales_invoice, tipo, descripcion, fecha, id_seller, modo_comision, porcentaje, valor, created_by_user_id, comprobante_key)
+       VALUES ($1, $2::bigint, $3, $4, $5::date, $6::bigint, $7, $8, $9, $10, $11::uuid)`,
       [
         scope.id_own_project,
         idInvoice,
@@ -197,6 +201,7 @@ export const createExpense = (db: Db, scope: Scope, idOrder: string, input: Expe
         porcentaje,
         valor,
         scope.id_user,
+        input.comprobante_key,
       ]
     );
     return readExpenses(client, idInvoice);
@@ -212,5 +217,24 @@ export const deleteExpense = (db: Db, scope: Scope, idOrder: string, idGasto: st
       [idGasto, idInvoice, scope.id_own_project]
     );
     if (rows.length === 0) throw expenseNotFound();
+    return readExpenses(client, idInvoice);
+  });
+
+// Adjunta la foto del comprobante a un gasto que no tenía (una sola vez).
+export const attachExpenseReceipt = (db: Db, scope: Scope, idOrder: string, idGasto: string, input: ExpenseReceiptBody) =>
+  withTransaction(db, async (client) => {
+    const idInvoice = await findInvoiceId(client, scope.id_own_project, idOrder);
+    const actual = await client.query(
+      `SELECT comprobante_key FROM sales_invoice_expenses
+        WHERE id_sales_invoice_expense = $1::bigint AND id_sales_invoice = $2::bigint AND id_own_project = $3
+        FOR UPDATE`,
+      [idGasto, idInvoice, scope.id_own_project]
+    );
+    if (actual.rows.length === 0) throw expenseNotFound();
+    if (actual.rows[0].comprobante_key) throw expenseHasReceipt();
+    await client.query(
+      `UPDATE sales_invoice_expenses SET comprobante_key = $2::uuid WHERE id_sales_invoice_expense = $1::bigint`,
+      [idGasto, input.comprobante_key]
+    );
     return readExpenses(client, idInvoice);
   });
