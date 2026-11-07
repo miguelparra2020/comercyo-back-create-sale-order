@@ -63,7 +63,7 @@ const SELLER_COLUMNS = `s.id_seller::text AS id_seller, s.nombre, s.telefono, s.
        s.valor_comision::text AS valor_comision, s.activo,
        coalesce(c.comisiones, 0)::text AS comisiones, coalesce(c.ventas, 0)::int AS ventas`;
 
-const SELLER_FROM = `sellers s
+const SELLER_FROM = `sales_sellers s
   LEFT JOIN LATERAL (
     SELECT sum(g.valor) AS comisiones, count(*) AS ventas
       FROM sales_invoice_expenses g
@@ -103,7 +103,7 @@ const readSeller = async (q: Queryable, idOwnProject: number, idSeller: string):
 
 export const createSeller = async (db: Queryable, scope: Scope, input: SellerBody): Promise<SellerDto> => {
   const { rows } = await db.query(
-    `INSERT INTO sellers (id_own_project, nombre, telefono, modo_comision, valor_comision, activo, created_by_user_id)
+    `INSERT INTO sales_sellers (id_own_project, nombre, telefono, modo_comision, valor_comision, activo, created_by_user_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id_seller::text AS id`,
     [scope.id_own_project, input.nombre, input.telefono, input.modo_comision, input.valor_comision, input.activo, scope.id_user]
@@ -114,7 +114,7 @@ export const createSeller = async (db: Queryable, scope: Scope, input: SellerBod
 // Los vendedores no se borran (tienen comisiones): se desactivan con activo=false.
 export const updateSeller = async (db: Queryable, scope: Scope, idSeller: string, input: SellerBody): Promise<SellerDto> => {
   const { rows } = await db.query(
-    `UPDATE sellers
+    `UPDATE sales_sellers
         SET nombre = $3, telefono = $4, modo_comision = $5, valor_comision = $6, activo = $7,
             updated_at = now(), updated_by_user_id = $8
       WHERE id_seller = $1::bigint AND id_own_project = $2
@@ -131,7 +131,7 @@ const readExpenses = async (q: Queryable, idInvoice: string): Promise<ExpensesRe
             to_char(g.fecha, 'YYYY-MM-DD') AS fecha, g.id_seller::text AS id_seller, s.nombre AS vendedor_nombre,
             g.modo_comision, g.porcentaje::text AS porcentaje, g.valor::text AS valor, g.created_at
        FROM sales_invoice_expenses g
-       LEFT JOIN sellers s ON s.id_seller = g.id_seller
+       LEFT JOIN sales_sellers s ON s.id_seller = g.id_seller
       WHERE g.id_sales_invoice = $1::bigint
       ORDER BY g.fecha, g.id_sales_invoice_expense`,
     [idInvoice]

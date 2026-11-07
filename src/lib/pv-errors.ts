@@ -161,9 +161,9 @@ const CHECK_BY_CONSTRAINT: Record<string, { code: string; message: string }> = {
   sales_invoice_payments_monto_check: { code: VALIDATION_CODE, message: MSG_PAGO.montoPositivo },
   sales_invoice_payments_metodo_check: { code: VALIDATION_CODE, message: MSG_PAGO.metodo },
   sales_invoice_payments_comprobante_check: { code: 'FV_PAGO_COMPROBANTE_REQUERIDO', message: MSG_PAGO.comprobante },
-  sellers_nombre_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.nombre },
-  sellers_modo_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.modo },
-  sellers_valor_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.porcentajeMax },
+  sales_sellers_nombre_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.nombre },
+  sales_sellers_modo_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.modo },
+  sales_sellers_valor_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.porcentajeMax },
   sales_invoice_expenses_tipo_check: { code: VALIDATION_CODE, message: MSG_GASTO.tipo },
   sales_invoice_expenses_comision_check: { code: VALIDATION_CODE, message: MSG_GASTO.valor },
 };
@@ -181,7 +181,7 @@ const UNIQUE_BY_CONSTRAINT: Record<string, { code: string; message: string; stat
     message: 'El pedido de venta ya está facturado',
     status: 409,
   },
-  sellers_nombre_uniq: { code: 'PV_VENDEDOR_DUPLICADO', message: MSG_VENDEDOR.duplicado, status: 409 },
+  sales_sellers_nombre_uniq: { code: 'PV_VENDEDOR_DUPLICADO', message: MSG_VENDEDOR.duplicado, status: 409 },
   // Dos peticiones con la misma comisión a la vez: la segunda choca con el índice.
   sales_invoice_expenses_seller_uniq: {
     code: 'FV_GASTO_VENDEDOR_REPETIDO',
