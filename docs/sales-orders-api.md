@@ -380,6 +380,23 @@ Cada devolución trae `numero` (DV-0001 por proyecto), `fecha`, `motivo`, `mueve
 `{ "resolucion": "Reposición" | "Reintegro", "fecha", "metodo"?, "monto"?, "referencia"? }` (409
 `FV_DEV_YA_RESUELTA`, 409 `FV_DEV_REINTEGRO_EXCEDE`, 409 `FV_DEV_STOCK_INSUFICIENTE`, 404 `FV_DEV_NO_ENCONTRADA`).
 
+### Vendedores y gastos de la factura
+
+Migración `20261107200000_vendedores_gastos_factura_venta`.
+
+- `GET /sellers` lista los vendedores del proyecto, primero los activos. Cada uno trae `comisiones` (total en facturas vigentes) y `ventas` (cuántas facturas).
+- `POST /sellers` crea un vendedor con `{ nombre, telefono?, modo_comision: 'Ganancia'|'Venta'|'Fijo', valor_comision, activo? }`. Un nombre repetido devuelve 409 `PV_VENDEDOR_DUPLICADO`.
+- `PUT /sellers/:idVendedor` lo actualiza. Los vendedores no se borran: `activo: false` los desactiva.
+- `GET /sales-orders/:id/expenses` devuelve `{ gastos, resumen: { venta, costo, ganancia_bruta, comisiones, otros_gastos, gastos, ganancia_neta } }`.
+- `POST /sales-orders/:id/expenses` registra un gasto con `tipo`: `Comisión`, `Preparación`, `Separación`, `Envío` u `Otro`.
+  - La comisión lleva `id_seller` y `modo_comision`.
+  - En `Ganancia` y `Venta` se envía `porcentaje` y la BD calcula el valor.
+  - El porcentaje sobre la ganancia se calcula al final: sobre venta − costo − otros gastos, y se recalcula cuando se agregan o borran otros gastos.
+  - En `Fijo` y en los demás tipos se envía `valor`.
+  - Errores: `FV_GASTO_VENDEDOR_REPETIDO`, `FV_GASTO_VENDEDOR_NO_ENCONTRADO`, `FV_GASTO_VENDEDOR_INACTIVO`, `FV_GASTO_FECHA_INVALIDA` y `FV_FACTURA_ANULADA`.
+- `DELETE /sales-orders/:id/expenses/:idGasto` borra un gasto. Los gastos no se editan.
+- Cada pedido trae `factura.gastos`. Ganancia neta = subtotal − descuento − costo − gastos.
+
 ### Abonos
 
 Un abono no se edita ni se borra; si se registró mal se **anula** con un motivo: sigue en la lista

@@ -8,7 +8,7 @@ import {
   isRaiseException,
   isUniqueViolation,
 } from './pg-errors';
-import { MSG, MSG_AJUSTE, MSG_PAGO, MSG_VENCIMIENTO_ANTERIOR } from '../validation/sales-orders.validation';
+import { MSG, MSG_AJUSTE, MSG_GASTO, MSG_PAGO, MSG_VENCIMIENTO_ANTERIOR, MSG_VENDEDOR } from '../validation/sales-orders.validation';
 
 export type PvErrorStatus = 400 | 404 | 409;
 
@@ -39,6 +39,8 @@ export const orderNotInvoiced = () =>
   new SalesOrderError(409, NOT_INVOICED_CODE, 'El pedido de venta no está facturado');
 export const paymentNotFound = () => new SalesOrderError(404, 'FV_PAGO_NO_ENCONTRADO', 'Abono no encontrado');
 export const returnNotFound = () => new SalesOrderError(404, 'FV_DEV_NO_ENCONTRADA', 'Devolución no encontrada');
+export const expenseNotFound = () => new SalesOrderError(404, 'FV_GASTO_NO_ENCONTRADO', 'Gasto no encontrado');
+export const sellerNotFound = () => new SalesOrderError(404, 'PV_VENDEDOR_NO_ENCONTRADO', 'Vendedor no encontrado');
 
 // Every code raised by so_raise() in migrations 20261015031310_create_sales_orders
 // and 20261017034032_sales_orders_ajustes. Keep in sync with their headers.
@@ -104,6 +106,13 @@ export const PV_ERROR_STATUS: Record<string, PvErrorStatus> = {
   FV_DEV_PRODUCTO_NO_FACTURADO: 400,
   FV_DEV_CANTIDAD_EXCEDE: 409,
   FV_ANULAR_CON_DEVOLUCIONES: 409,
+  // Gastos de la factura (20261107200000_vendedores_gastos_factura_venta)
+  FV_GASTO_FACTURA_NO_ENCONTRADA: 404,
+  FV_GASTO_FECHA_INVALIDA: 400,
+  FV_GASTO_VENDEDOR_NO_ENCONTRADO: 400,
+  FV_GASTO_VENDEDOR_INACTIVO: 400,
+  FV_GASTO_VENDEDOR_REPETIDO: 409,
+  FV_GASTO_INMUTABLE: 409,
 };
 
 const PV_MESSAGE_REGEX = /^((?:PV|FV)_[A-Z_]+):\s*([\s\S]*)$/;
@@ -152,6 +161,11 @@ const CHECK_BY_CONSTRAINT: Record<string, { code: string; message: string }> = {
   sales_invoice_payments_monto_check: { code: VALIDATION_CODE, message: MSG_PAGO.montoPositivo },
   sales_invoice_payments_metodo_check: { code: VALIDATION_CODE, message: MSG_PAGO.metodo },
   sales_invoice_payments_comprobante_check: { code: 'FV_PAGO_COMPROBANTE_REQUERIDO', message: MSG_PAGO.comprobante },
+  sales_sellers_nombre_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.nombre },
+  sales_sellers_modo_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.modo },
+  sales_sellers_valor_check: { code: VALIDATION_CODE, message: MSG_VENDEDOR.porcentajeMax },
+  sales_invoice_expenses_tipo_check: { code: VALIDATION_CODE, message: MSG_GASTO.tipo },
+  sales_invoice_expenses_comision_check: { code: VALIDATION_CODE, message: MSG_GASTO.valor },
 };
 
 // sales_orders_numero_uniq is deliberately absent: a duplicated number is an
@@ -165,6 +179,13 @@ const UNIQUE_BY_CONSTRAINT: Record<string, { code: string; message: string; stat
   sales_invoices_pedido_uniq: {
     code: 'FV_PEDIDO_YA_FACTURADO',
     message: 'El pedido de venta ya está facturado',
+    status: 409,
+  },
+  sales_sellers_nombre_uniq: { code: 'PV_VENDEDOR_DUPLICADO', message: MSG_VENDEDOR.duplicado, status: 409 },
+  // Dos peticiones con la misma comisión a la vez: la segunda choca con el índice.
+  sales_invoice_expenses_seller_uniq: {
+    code: 'FV_GASTO_VENDEDOR_REPETIDO',
+    message: 'El vendedor ya tiene comisión en esta factura',
     status: 409,
   },
   sales_invoice_payments_comprobante_key_uniq: {

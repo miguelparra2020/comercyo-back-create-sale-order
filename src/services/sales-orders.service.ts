@@ -61,6 +61,8 @@ export type SalesInvoiceDto = {
   pagado: string;
   // Dinero devuelto al cliente por devoluciones: baja el saldo (nota crédito).
   reintegrado: string;
+  // Gastos de la factura (comisiones, envío...): bajan la ganancia del pedido.
+  gastos: string;
   saldo: string;
   estado: EstadoFactura;
   dias_vencida: number | null;
@@ -144,6 +146,7 @@ const FACTURA_COLUMNS = `
   vi.created_at AS factura_created_at,
   vi.abonado::text AS factura_pagado,
   dev.reintegrado::text AS factura_reintegrado,
+  gas.gastos::text AS factura_gastos,
   greatest(vi.total - vi.abonado - dev.reintegrado, 0)::text AS factura_saldo,
   CASE WHEN vi.abonado + dev.reintegrado >= vi.total THEN 'Pagada' ELSE vi.estado END AS factura_estado,
   CASE WHEN vi.abonado + dev.reintegrado >= vi.total THEN NULL ELSE vi.dias_vencida END AS factura_dias_vencida
@@ -156,7 +159,11 @@ const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado')}, ${FACTURA
     -- Reintegros de devoluciones: con ellos la factura puede quedar pagada sin abonos completos.
     SELECT coalesce(sum(d.monto_reintegro) FILTER (WHERE d.resolucion = 'Reintegro'), 0) AS reintegrado
       FROM sales_returns d WHERE d.id_sales_invoice = vi.id_sales_invoice
-  ) dev ON vi.id_sales_invoice IS NOT NULL`;
+  ) dev ON vi.id_sales_invoice IS NOT NULL
+  LEFT JOIN LATERAL (
+    SELECT coalesce(sum(g.valor), 0) AS gastos
+      FROM sales_invoice_expenses g WHERE g.id_sales_invoice = vi.id_sales_invoice
+  ) gas ON vi.id_sales_invoice IS NOT NULL`;
 
 const LINE_COLUMNS = `
   id_sales_order::text AS id_sales_order,
@@ -219,6 +226,7 @@ export const toInvoiceDto = (row: any): SalesInvoiceDto | null =>
         created_at: toIso(row.factura_created_at) as string,
         pagado: String(row.factura_pagado ?? '0'),
         reintegrado: String(row.factura_reintegrado ?? '0'),
+        gastos: String(row.factura_gastos ?? '0'),
         saldo: String(row.factura_saldo ?? row.factura_total),
         estado: row.factura_estado,
         dias_vencida: row.factura_dias_vencida === null || row.factura_dias_vencida === undefined ? null : Number(row.factura_dias_vencida),

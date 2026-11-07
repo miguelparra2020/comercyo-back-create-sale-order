@@ -625,3 +625,141 @@ export const issueCode = (issues: ReadonlyArray<object> | undefined): string | u
   const code = (issues?.[0] as { params?: { code?: unknown } } | undefined)?.params?.code;
   return typeof code === 'string' ? code : undefined;
 };
+
+// Vendedores del proyecto (GET/POST /sellers, PUT /sellers/:idVendedor) y gastos
+// de la factura de venta (GET/POST /sales-orders/:id/expenses, DELETE
+// .../expenses/:idGasto). La BD calcula el valor de las comisiones en % y
+// valida factura, fechas y vendedor (FV_GASTO_*).
+export const NOMBRE_VENDEDOR_MAX = 120;
+export const TELEFONO_VENDEDOR_MAX = 30;
+export const DESCRIPCION_GASTO_MAX = 200;
+export const MODOS_COMISION = ['Ganancia', 'Venta', 'Fijo'] as const;
+export type ModoComision = (typeof MODOS_COMISION)[number];
+export const TIPOS_GASTO = ['Comisión', 'Preparación', 'Separación', 'Envío', 'Otro'] as const;
+export type TipoGasto = (typeof TIPOS_GASTO)[number];
+
+export const MSG_VENDEDOR = {
+  nombre: 'El nombre del vendedor es obligatorio',
+  nombreMax: `El nombre debe tener máximo ${NOMBRE_VENDEDOR_MAX} caracteres`,
+  telefono: `El teléfono debe tener máximo ${TELEFONO_VENDEDOR_MAX} caracteres`,
+  modo: 'La comisión debe ser Ganancia (% de la ganancia), Venta (% de la venta) o Fijo',
+  valor: 'La comisión debe ser un número mayor o igual a 0',
+  porcentajeMax: 'El porcentaje de comisión no puede ser mayor a 100',
+  duplicado: 'Ya existe un vendedor con ese nombre',
+} as const;
+
+export const MSG_GASTO = {
+  tipo: 'El tipo de gasto debe ser Comisión, Preparación, Separación, Envío u Otro',
+  descripcion: `La descripción debe tener máximo ${DESCRIPCION_GASTO_MAX} caracteres`,
+  vendedor: 'La comisión requiere el vendedor',
+  modo: 'La comisión requiere el modo: Ganancia, Venta o Fijo',
+  porcentaje: 'El porcentaje debe ser mayor a 0 y máximo 100',
+  valor: 'El valor del gasto debe ser mayor a 0',
+} as const;
+
+const valorPesos = (message: string) =>
+  z
+    .number({ error: message })
+    .max(PRECIO_MAX, message)
+    .refine(hasAtMostTwoDecimals, 'El valor admite máximo 2 decimales');
+
+export const SellerBodySchema = z
+  .object(
+    {
+      nombre: z
+        .string({ error: MSG_VENDEDOR.nombre })
+        .trim()
+        .min(1, MSG_VENDEDOR.nombre)
+        .max(NOMBRE_VENDEDOR_MAX, MSG_VENDEDOR.nombreMax)
+        .openapi({ example: 'Ana Gómez' }),
+      telefono: z
+        .string({ error: MSG_VENDEDOR.telefono })
+        .trim()
+        .max(TELEFONO_VENDEDOR_MAX, MSG_VENDEDOR.telefono)
+        .nullish()
+        .transform((v) => v ?? '')
+        .openapi({ example: '3001234567' }),
+      modo_comision: z.enum(MODOS_COMISION, { error: MSG_VENDEDOR.modo }).default('Ganancia').openapi({ example: 'Ganancia' }),
+      valor_comision: valorPesos(MSG_VENDEDOR.valor).min(0, MSG_VENDEDOR.valor).default(0).openapi({
+        example: 50,
+        description: 'Porcentaje (0-100) en Ganancia y Venta; valor en pesos en Fijo',
+      }),
+      activo: z.boolean({ error: 'activo debe ser true o false' }).default(true).openapi({ example: true }),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((body, ctx) => {
+    if (body.modo_comision !== 'Fijo' && body.valor_comision > 100) {
+      ctx.addIssue({ code: 'custom', path: ['valor_comision'], message: MSG_VENDEDOR.porcentajeMax });
+    }
+  });
+
+export type SellerBody = z.output<typeof SellerBodySchema>;
+
+export const SellerIdParamSchema = z.object({
+  idVendedor: z
+    .string()
+    .refine(isPositiveBigintId, 'El id del vendedor debe ser un entero positivo')
+    .openapi({ param: { name: 'idVendedor', in: 'path' }, example: '3' }),
+});
+
+export const ExpenseBodySchema = z
+  .object(
+    {
+      tipo: z.enum(TIPOS_GASTO, { error: MSG_GASTO.tipo }).openapi({ example: 'Comisión' }),
+      descripcion: z
+        .string({ error: MSG_GASTO.descripcion })
+        .trim()
+        .max(DESCRIPCION_GASTO_MAX, MSG_GASTO.descripcion)
+        .nullish()
+        .transform((v) => v ?? '')
+        .openapi({ example: 'Comisión de la venta' }),
+      fecha: dateField(
+        'La fecha del gasto es obligatoria',
+        'La fecha del gasto debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-11-07', description: 'Entre la fecha de la factura y hoy' }),
+      id_seller: bigintId(MSG_GASTO.vendedor, 'El id_seller debe ser un entero positivo')
+        .nullish()
+        .transform((v) => v ?? null)
+        .openapi({ example: 3, description: 'Solo en Comisión' }),
+      modo_comision: z
+        .enum(MODOS_COMISION, { error: MSG_GASTO.modo })
+        .nullish()
+        .transform((v) => v ?? null)
+        .openapi({ example: 'Ganancia', description: 'Solo en Comisión' }),
+      porcentaje: z
+        .number({ error: MSG_GASTO.porcentaje })
+        .gt(0, MSG_GASTO.porcentaje)
+        .max(100, MSG_GASTO.porcentaje)
+        .refine(hasAtMostTwoDecimals, 'El porcentaje admite máximo 2 decimales')
+        .nullish()
+        .transform((v) => v ?? null)
+        .openapi({ example: 50, description: 'Comisión en Ganancia o Venta' }),
+      valor: valorPesos(MSG_GASTO.valor)
+        .gt(0, MSG_GASTO.valor)
+        .nullish()
+        .transform((v) => v ?? null)
+        .openapi({ example: 15000, description: 'Gastos y comisión Fijo; en % lo calcula la BD' }),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((body, ctx) => {
+    if (body.tipo === 'Comisión') {
+      if (body.id_seller === null) ctx.addIssue({ code: 'custom', path: ['id_seller'], message: MSG_GASTO.vendedor });
+      if (body.modo_comision === null) ctx.addIssue({ code: 'custom', path: ['modo_comision'], message: MSG_GASTO.modo });
+      else if (body.modo_comision === 'Fijo') {
+        if (body.valor === null) ctx.addIssue({ code: 'custom', path: ['valor'], message: MSG_GASTO.valor });
+      } else if (body.porcentaje === null) ctx.addIssue({ code: 'custom', path: ['porcentaje'], message: MSG_GASTO.porcentaje });
+    } else if (body.valor === null) {
+      ctx.addIssue({ code: 'custom', path: ['valor'], message: MSG_GASTO.valor });
+    }
+  });
+
+export type ExpenseBody = z.output<typeof ExpenseBodySchema>;
+
+export const ExpenseIdParamSchema = IdParamSchema.extend({
+  idGasto: z
+    .string()
+    .refine(isPositiveBigintId, 'El id del gasto debe ser un entero positivo')
+    .openapi({ param: { name: 'idGasto', in: 'path' }, example: '7' }),
+});
