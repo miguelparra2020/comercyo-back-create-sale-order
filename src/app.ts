@@ -9,6 +9,7 @@ import { requireOwnProject } from './middlewares/require-own-project.middleware'
 import { rateLimiter } from './middlewares/rate-limit.middleware';
 import { registerSalesOrdersRoutes } from './routes/sales-orders.routes';
 import { registerSalesInvoicePaymentsRoutes } from './routes/sales-invoice-payments.routes';
+import { registerSalesReturnsRoutes } from './routes/sales-returns.routes';
 import { validationHook } from './lib/validation-hook';
 import { errorHandler } from './lib/error-handler';
 
@@ -91,6 +92,7 @@ apiV1.use('/sales-orders/*', requireOwnProject());
 
 registerSalesOrdersRoutes(apiV1);
 registerSalesInvoicePaymentsRoutes(apiV1);
+registerSalesReturnsRoutes(apiV1);
 
 app.route('/api/v1', apiV1);
 

@@ -484,11 +484,120 @@ export const VoidPaymentBodySchema = z.object(
 
 export type VoidPaymentBody = z.output<typeof VoidPaymentBodySchema>;
 
+// Devoluciones del cliente sobre la factura de venta (POST /sales-orders/:id/returns
+// y .../returns/:idDev/resolve). Stock, topes de cantidad, fechas y tope del
+// reintegro los valida la BD (FV_DEV_*).
+export const MOTIVO_DEVOLUCION_MAX = 200;
+export const RESOLUCIONES_DEVOLUCION = ['Reposición', 'Reintegro'] as const;
+export type ResolucionDevolucion = (typeof RESOLUCIONES_DEVOLUCION)[number];
+
+export const MSG_DEVOLUCION = {
+  motivo: 'Indica el motivo de la devolución',
+  motivoMax: `El motivo debe tener máximo ${MOTIVO_DEVOLUCION_MAX} caracteres`,
+  lineas: 'Indica al menos un producto a devolver',
+  cantidad: 'La cantidad a devolver debe ser un número entero mayor o igual a 1',
+  resolucion: 'La resolución debe ser Reposición o Reintegro',
+  reintegroMetodo: 'El reintegro requiere el método (Transferencia o Efectivo)',
+  reintegroMonto: 'El reintegro requiere el monto',
+} as const;
+
+const motivoDevolucion = z
+  .any()
+  .superRefine((value, ctx) => {
+    if (typeof value !== 'string' || value.trim() === '') ctx.addIssue({ code: 'custom', message: MSG_DEVOLUCION.motivo });
+    else if (value.trim().length > MOTIVO_DEVOLUCION_MAX) ctx.addIssue({ code: 'custom', message: MSG_DEVOLUCION.motivoMax });
+  })
+  .transform((value) => (value as string).trim())
+  .openapi({ type: 'string', example: 'No le quedó' });
+
+const LineaDevolucionSchema = z.object(
+  {
+    id_product: bigintId('El producto a devolver es obligatorio', 'El id_product debe ser un entero positivo').openapi({ example: 789 }),
+    cantidad: z
+      .number({ error: MSG_DEVOLUCION.cantidad })
+      .int(MSG_DEVOLUCION.cantidad)
+      .min(1, MSG_DEVOLUCION.cantidad)
+      .max(1_000_000, MSG_DEVOLUCION.cantidad)
+      .openapi({ example: 2 }),
+  },
+  { error: 'Cada línea debe ser un objeto con id_product y cantidad' }
+);
+
+export const ReturnBodySchema = z
+  .object(
+    {
+      fecha: dateField(
+        'La fecha de la devolución es obligatoria',
+        'La fecha de la devolución debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-11-07', description: 'Entre la fecha de la factura y hoy' }),
+      motivo: motivoDevolucion,
+      lineas: z
+        .array(LineaDevolucionSchema, { error: MSG_DEVOLUCION.lineas })
+        .min(1, MSG_DEVOLUCION.lineas)
+        .max(50, 'Máximo 50 productos por devolución')
+        .openapi({ description: 'Productos de la factura y cantidades a devolver' }),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((body, ctx) => {
+    const vistos = new Set<string>();
+    body.lineas.forEach((linea, index) => {
+      if (vistos.has(linea.id_product)) {
+        ctx.addIssue({ code: 'custom', path: ['lineas', index, 'id_product'], message: `El producto ${linea.id_product} está repetido en la devolución` });
+      }
+      vistos.add(linea.id_product);
+    });
+  });
+
+export type ReturnBody = z.output<typeof ReturnBodySchema>;
+
+export const ResolveReturnBodySchema = z
+  .object(
+    {
+      resolucion: z.enum(RESOLUCIONES_DEVOLUCION, { error: MSG_DEVOLUCION.resolucion }).openapi({ example: 'Reintegro' }),
+      fecha: dateField(
+        'La fecha de la resolución es obligatoria',
+        'La fecha de la resolución debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-11-08', description: 'Igual o posterior a la devolución y no después de hoy' }),
+      metodo: z.enum(METODOS_PAGO, { error: MSG_PAGO.metodo }).nullish().transform((v) => v ?? null).openapi({ example: 'Transferencia' }),
+      monto: z
+        .number({ error: MSG_PAGO.monto })
+        .positive(MSG_PAGO.montoPositivo)
+        .max(PRECIO_MAX, MSG_PAGO.montoMax)
+        .refine(hasAtMostTwoDecimals, MSG_PAGO.montoDecimales)
+        .nullish()
+        .transform((v) => v ?? null)
+        .openapi({ example: 40000, description: 'Solo para Reintegro; no puede superar el valor de la devolución' }),
+      referencia: z
+        .string({ error: 'La referencia debe ser texto' })
+        .trim()
+        .max(REFERENCIA_PAGO_MAX, MSG_PAGO.referencia)
+        .nullish()
+        .transform((v) => v ?? '')
+        .openapi({ example: 'Transferencia #1234' }),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((body, ctx) => {
+    if (body.resolucion !== 'Reintegro') return;
+    if (body.metodo === null) ctx.addIssue({ code: 'custom', path: ['metodo'], message: MSG_DEVOLUCION.reintegroMetodo });
+    if (body.monto === null) ctx.addIssue({ code: 'custom', path: ['monto'], message: MSG_DEVOLUCION.reintegroMonto });
+  });
+
+export type ResolveReturnBody = z.output<typeof ResolveReturnBodySchema>;
+
 export const IdParamSchema = z.object({
   id: z
     .string()
     .refine(isPositiveBigintId, 'El id debe ser un entero positivo')
     .openapi({ param: { name: 'id', in: 'path' }, example: '123' }),
+});
+
+export const ReturnIdParamSchema = IdParamSchema.extend({
+  idDev: z
+    .string()
+    .refine(isPositiveBigintId, 'El id de la devolución debe ser un entero positivo')
+    .openapi({ param: { name: 'idDev', in: 'path' }, example: '4' }),
 });
 
 export const PaymentIdParamSchema = IdParamSchema.extend({

@@ -71,6 +71,7 @@ vi.mock('../config/db', () => ({ getUsersDb: () => ({ query, connect }) }));
 
 import { registerSalesOrdersRoutes } from './sales-orders.routes';
 import { registerSalesInvoicePaymentsRoutes } from './sales-invoice-payments.routes';
+import { registerSalesReturnsRoutes } from './sales-returns.routes';
 import { validationHook } from '../lib/validation-hook';
 import { errorHandler } from '../lib/error-handler';
 import { mapSalesOrderError } from '../lib/pv-errors';
@@ -103,6 +104,7 @@ function buildApp(id_own_project: number) {
   });
   registerSalesOrdersRoutes(app);
   registerSalesInvoicePaymentsRoutes(app);
+  registerSalesReturnsRoutes(app);
   app.onError(errorHandler);
   return app;
 }
@@ -789,6 +791,55 @@ describe('sales orders against the real database (rolled back)', () => {
       await query('UPDATE productos SET stock = 1000 WHERE id_product = $1', [F.cuaderno]);
     });
 
+    it('devoluciones del cliente: suman al stock, reposición resta, reintegro baja el saldo', async () => {
+      const stock = async () => Number((await query('SELECT stock FROM productos WHERE id_product = $1', [F.cuaderno])).rows[0].stock);
+      const cop = (n: number) => n.toFixed(2);
+      await query('UPDATE productos SET stock = 10 WHERE id_product = $1', [F.cuaderno]);
+      // 4 cuadernos; facturar descuenta: 10 -> 6.
+      const ped = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 4 }] });
+      const precio = Number(ped.lineas[0].precio_unitario);
+      const total = Number(ped.total);
+      expect((await facturar(ped.id_sales_order)).status).toBe(200);
+      expect(await stock()).toBe(6);
+      const url = `/sales-orders/${ped.id_sales_order}/returns`;
+
+      const creada = await call(a, url, 'POST', { fecha: hoy, motivo: 'No le quedó', lineas: [{ id_product: Number(F.cuaderno), cantidad: 2 }] });
+      expect(creada.status, JSON.stringify(creada.body)).toBe(201);
+      const dev = creada.body.data.devoluciones[0];
+      expect(dev).toMatchObject({ numero: expect.stringMatching(/^DV-\d{4,}$/), valor: cop(2 * precio), mueve_inventario: true, resolucion: null });
+      expect(dev.lineas[0]).toMatchObject({ cantidad: 2, precio_unitario: cop(precio), subtotal: cop(2 * precio) });
+      expect(await stock()).toBe(8);
+
+      const exceso = await call(a, url, 'POST', { fecha: hoy, motivo: 'x', lineas: [{ id_product: Number(F.cuaderno), cantidad: 3 }] });
+      expect(exceso).toMatchObject({ status: 409, body: { code: 'FV_DEV_CANTIDAD_EXCEDE' } });
+
+      const repuesta = await call(a, `${url}/${dev.id_sales_return}/resolve`, 'POST', { resolucion: 'Reposición', fecha: hoy });
+      expect(repuesta.status).toBe(200);
+      expect(await stock()).toBe(6);
+      const otraVez = await call(a, `${url}/${dev.id_sales_return}/resolve`, 'POST', { resolucion: 'Reposición', fecha: hoy });
+      expect(otraVez).toMatchObject({ status: 409, body: { code: 'FV_DEV_YA_RESUELTA' } });
+
+      const segunda = await call(a, url, 'POST', { fecha: hoy, motivo: 'Se arrepintió', lineas: [{ id_product: Number(F.cuaderno), cantidad: 1 }] });
+      const idDos = segunda.body.data.devoluciones[1].id_sales_return;
+      const excede = await call(a, `${url}/${idDos}/resolve`, 'POST', { resolucion: 'Reintegro', fecha: hoy, metodo: 'Efectivo', monto: precio + 0.01 });
+      expect(excede).toMatchObject({ status: 409, body: { code: 'FV_DEV_REINTEGRO_EXCEDE' } });
+      const reintegro = await call(a, `${url}/${idDos}/resolve`, 'POST', { resolucion: 'Reintegro', fecha: hoy, metodo: 'Efectivo', monto: precio });
+      expect(reintegro.body.data.resumen).toEqual({ devuelto: cop(3 * precio), reintegrado: cop(precio), por_resolver: '0' });
+      expect(await stock()).toBe(7);
+
+      // El saldo de la factura descuenta el reintegro, en el pedido y en los abonos.
+      const saldo = total - precio;
+      const got = await call(a, `/sales-orders/${ped.id_sales_order}`);
+      expect(got.body.data.factura).toMatchObject({ total: cop(total), pagado: '0.00', reintegrado: cop(precio), saldo: cop(saldo) });
+      const abonoGrande = await abonar(ped.id_sales_order, { metodo: 'Efectivo', monto: saldo + 0.01 });
+      expect(abonoGrande).toMatchObject({ status: 409, body: { code: 'FV_PAGO_EXCEDE_SALDO' } });
+      const abono = await abonar(ped.id_sales_order, { metodo: 'Efectivo', monto: saldo });
+      expect(abono.body.data.resumen).toMatchObject({ pagado: cop(saldo), reintegrado: cop(precio), saldo: '0.00', estado: 'Pagada' });
+      const pagada = await call(a, `/sales-orders/${ped.id_sales_order}`);
+      expect(pagada.body.data.factura).toMatchObject({ estado: 'Pagada', saldo: '0.00', dias_vencida: null });
+      await query('UPDATE productos SET stock = 1000 WHERE id_product = $1', [F.cuaderno]);
+    });
+
     it('factura el pedido: FV-xxxx, total copiado, estado Pendiente y bloquea cancelar/editar', async () => {
       const ped = await crear({ lineas: [{ id_product: F.resma, cantidad: 2 }] });
       const res = await facturar(ped.id_sales_order, { notas: '  A 30 días ' });
@@ -839,11 +890,11 @@ describe('sales orders against the real database (rolled back)', () => {
       await facturar(id);
 
       const vacio = await call(a, `/sales-orders/${id}/payments`);
-      expect(vacio.body.data).toEqual({ pagos: [], resumen: { total: '18000.00', pagado: '0', saldo: '18000.00', estado: 'Pendiente' } });
+      expect(vacio.body.data).toEqual({ pagos: [], resumen: { total: '18000.00', pagado: '0', reintegrado: '0', saldo: '18000.00', estado: 'Pendiente' } });
 
       const efectivo = await abonar(id, { metodo: 'Efectivo', monto: 5000, referencia: ' Recibo 1 ' });
       expect(efectivo.status, JSON.stringify(efectivo.body)).toBe(201);
-      expect(efectivo.body.data.resumen).toEqual({ total: '18000.00', pagado: '5000.00', saldo: '13000.00', estado: 'Pago parcial' });
+      expect(efectivo.body.data.resumen).toEqual({ total: '18000.00', pagado: '5000.00', reintegrado: '0', saldo: '13000.00', estado: 'Pago parcial' });
       expect(efectivo.body.data.pagos[0]).toMatchObject({ metodo: 'Efectivo', monto: '5000.00', referencia: 'Recibo 1', comprobante_key: null, anulado_en: null });
 
       // La cartera se lee del pedido: pagado y saldo de la factura.
