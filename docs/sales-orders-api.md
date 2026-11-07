@@ -395,6 +395,10 @@ Migración `20261107200000_vendedores_gastos_factura_venta`.
   - En `Fijo` y en los demás tipos se envía `valor`.
   - Errores: `FV_GASTO_VENDEDOR_REPETIDO`, `FV_GASTO_VENDEDOR_NO_ENCONTRADO`, `FV_GASTO_VENDEDOR_INACTIVO`, `FV_GASTO_FECHA_INVALIDA` y `FV_FACTURA_ANULADA`.
 - `DELETE /sales-orders/:id/expenses/:idGasto` borra un gasto. Los gastos no se editan.
+- **Comprobante opcional** (migración `20261107210000_gastos_factura_comprobante`):
+  - La foto se sube a `comercyo-back-payments-purchase-order` (`/sales-orders/:orderId/payments`, la misma carpeta que los abonos).
+  - Su key se envía como `comprobante_key` al registrar el gasto, o después con `PUT /sales-orders/:id/expenses/:idGasto/receipt` `{ comprobante_key }`. Solo se puede adjuntar una vez: si el gasto ya tiene comprobante, responde 409 `FV_GASTO_CON_COMPROBANTE`.
+  - Una misma foto no se puede usar en dos gastos: 409 `FV_GASTO_COMPROBANTE_EN_USO`.
 - Cada pedido trae `factura.gastos`. Ganancia neta = subtotal − descuento − costo − gastos.
 
 ### Abonos

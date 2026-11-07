@@ -40,6 +40,7 @@ const SALES_ORDER_PATHS = [
   '/sales-orders/{id}/returns/{idDev}/resolve',
   '/sales-orders/{id}/expenses',
   '/sales-orders/{id}/expenses/{idGasto}',
+  '/sales-orders/{id}/expenses/{idGasto}/receipt',
   '/sellers',
   '/sellers/{idVendedor}',
 ];

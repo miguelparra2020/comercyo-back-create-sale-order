@@ -4,6 +4,7 @@ import * as service from '../services/sales-expenses.service';
 import {
   ExpenseBodySchema,
   ExpenseIdParamSchema,
+  ExpenseReceiptBodySchema,
   IdParamSchema,
   MODOS_COMISION,
   SellerBodySchema,
@@ -39,6 +40,7 @@ const ExpenseSchema = z
     modo_comision: z.enum(MODOS_COMISION).nullable(),
     porcentaje: z.string().nullable().openapi({ example: '50.00' }),
     valor: z.string().openapi({ example: '6000', description: 'En comisiones en % lo calcula la BD' }),
+    comprobante_key: z.string().nullable().openapi({ description: 'Foto del comprobante (opcional)' }),
     created_at: z.string(),
   })
   .openapi('SalesInvoiceExpense');
@@ -110,7 +112,8 @@ export const registerSalesExpensesRoutes = (apiV1: any) => {
       'Comisión: id_seller y modo_comision; en Ganancia/Venta va porcentaje y la BD calcula el valor',
       '(sobre la ganancia: venta - costo - otros gastos, recalculado cuando cambian); en Fijo va valor.',
       'Errores: 409 FV_GASTO_VENDEDOR_REPETIDO, 400 FV_GASTO_VENDEDOR_NO_ENCONTRADO / FV_GASTO_VENDEDOR_INACTIVO,',
-      '400 FV_GASTO_FECHA_INVALIDA, 409 FV_FACTURA_ANULADA, 400 PV_VALIDACION.',
+      '400 FV_GASTO_FECHA_INVALIDA, 409 FV_FACTURA_ANULADA, 409 FV_GASTO_COMPROBANTE_EN_USO, 400 PV_VALIDACION.',
+      'comprobante_key (opcional): key de la foto subida a comercyo-back-payments-purchase-order.',
       NOT_INVOICED,
     ].join('\n'),
     request: { params: IdParamSchema, body: { ...json(ExpenseBodySchema), required: true } },
@@ -125,6 +128,30 @@ export const registerSalesExpensesRoutes = (apiV1: any) => {
     description: ['Errores: 404 FV_GASTO_NO_ENCONTRADO, 409 FV_FACTURA_ANULADA.', NOT_INVOICED].join('\n'),
     request: { params: ExpenseIdParamSchema },
     responses: { 200: { description: 'Gasto borrado', ...json(ok(ExpensesSchema)) }, ...errorResponses },
+  });
+
+  const attachReceiptRoute = createRoute({
+    ...common,
+    method: 'put',
+    path: '/sales-orders/{id}/expenses/{idGasto}/receipt',
+    summary: 'Adjuntar el comprobante de pago a un gasto que no tiene (una sola vez)',
+    description: [
+      'Errores: 409 FV_GASTO_CON_COMPROBANTE, 409 FV_GASTO_COMPROBANTE_EN_USO, 404 FV_GASTO_NO_ENCONTRADO, 409 FV_FACTURA_ANULADA.',
+      NOT_INVOICED,
+    ].join('\n'),
+    request: { params: ExpenseIdParamSchema, body: { ...json(ExpenseReceiptBodySchema), required: true } },
+    responses: { 200: { description: 'Comprobante adjuntado', ...json(ok(ExpensesSchema)) }, ...errorResponses },
+  });
+
+  apiV1.openapi(attachReceiptRoute, async (c: Ctx) => {
+    const { input, response } = await parseOrderBody(c, ExpenseReceiptBodySchema);
+    if (response) return response;
+    try {
+      const data = await service.attachExpenseReceipt(getUsersDb(), scopeOf(c), c.req.param('id'), c.req.param('idGasto'), input);
+      return c.json({ success: true, data }, 200);
+    } catch (err) {
+      return respondError(c, err);
+    }
   });
 
   apiV1.openapi(listSellersRoute, async (c: Ctx) => {

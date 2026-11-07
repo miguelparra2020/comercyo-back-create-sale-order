@@ -40,6 +40,8 @@ export const orderNotInvoiced = () =>
 export const paymentNotFound = () => new SalesOrderError(404, 'FV_PAGO_NO_ENCONTRADO', 'Abono no encontrado');
 export const returnNotFound = () => new SalesOrderError(404, 'FV_DEV_NO_ENCONTRADA', 'Devolución no encontrada');
 export const expenseNotFound = () => new SalesOrderError(404, 'FV_GASTO_NO_ENCONTRADO', 'Gasto no encontrado');
+export const expenseHasReceipt = () =>
+  new SalesOrderError(409, 'FV_GASTO_CON_COMPROBANTE', 'El gasto ya tiene comprobante');
 export const sellerNotFound = () => new SalesOrderError(404, 'PV_VENDEDOR_NO_ENCONTRADO', 'Vendedor no encontrado');
 
 // Every code raised by so_raise() in migrations 20261015031310_create_sales_orders
@@ -186,6 +188,11 @@ const UNIQUE_BY_CONSTRAINT: Record<string, { code: string; message: string; stat
   sales_invoice_expenses_seller_uniq: {
     code: 'FV_GASTO_VENDEDOR_REPETIDO',
     message: 'El vendedor ya tiene comisión en esta factura',
+    status: 409,
+  },
+  sales_invoice_expenses_comprobante_key_uniq: {
+    code: 'FV_GASTO_COMPROBANTE_EN_USO',
+    message: 'Ese comprobante ya está en otro gasto',
     status: 409,
   },
   sales_invoice_payments_comprobante_key_uniq: {
