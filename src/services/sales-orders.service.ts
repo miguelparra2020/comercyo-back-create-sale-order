@@ -39,6 +39,8 @@ export type SalesOrderLineDto = {
   cantidad: number;
   precio_unitario: string;
   subtotal: string;
+  // Product cost when the line was added (DB snapshot of productos.precio_costo).
+  costo_unitario: string;
 };
 
 // Estado de cobro de la factura: lo calcula v_sales_invoices con la fecha de
@@ -156,7 +158,8 @@ const LINE_COLUMNS = `
   referencia,
   cantidad,
   precio_unitario::text AS precio_unitario,
-  subtotal::text AS subtotal
+  subtotal::text AS subtotal,
+  costo_unitario::text AS costo_unitario
 `;
 
 // numero is 'PED-' + a zero-padded counter that grows past 4 digits
@@ -192,6 +195,7 @@ export const toLineDto = (row: any): SalesOrderLineDto => ({
   cantidad: Number(row.cantidad),
   precio_unitario: String(row.precio_unitario),
   subtotal: String(row.subtotal),
+  costo_unitario: String(row.costo_unitario),
 });
 
 // factura_* come from the LEFT JOIN in SELECT_ORDER_FROM_VIEW; absent or null -> no invoice.

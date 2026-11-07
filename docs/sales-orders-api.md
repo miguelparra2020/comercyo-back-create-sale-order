@@ -33,7 +33,8 @@ Límite: 100 peticiones/minuto por IP → 429 `RATE_LIMITED`.
 (de la línea y del pedido), `descuento_monto`, `impuesto_monto`,
 `cliente_nombre` (copia de `customers.nombre`), `producto_nombre` y `referencia` (copia de
 `productos.nombre` y `productos.sku`), `precio_unitario` por defecto (`precio_venta_linea` del
-producto), `entregado_en`, la máquina de estados, el bloqueo de edición y de borrado, la
+producto), `costo_unitario` (copia de `productos.precio_costo` al agregar la línea: no cambia si
+después cambia el costo del producto; sirve para la ganancia del pedido), `entregado_en`, la máquina de estados, el bloqueo de edición y de borrado, la
 validación de cliente y productos (mismo proyecto, cliente activo, producto no eliminado),
 el máximo de 50 líneas y el producto no repetido.
 La API ignora esos campos si vienen en el body. El estado solo cambia con
@@ -73,7 +74,8 @@ La API ignora esos campos si vienen en el body. El estado solo cambia con
       "referencia": "RES-CARTA",
       "cantidad": 2,
       "precio_unitario": "18000.00",
-      "subtotal": "36000.00"
+      "subtotal": "36000.00",
+      "costo_unitario": "12000.00"
     }
   ]
 }
@@ -83,7 +85,7 @@ La API ignora esos campos si vienen en el body. El estado solo cambia con
   `id_customer` va como string igual que en `comercyo-back-create-customers`.
 - `id_own_project` → number (igual que en órdenes de compra).
 - numeric (`descuento_valor`, `impuesto_valor`, `costo_envio`, `subtotal`, `descuento_monto`,
-  `impuesto_monto`, `total`, `precio_unitario`, `subtotal` de la línea) → string con 2 decimales.
+  `impuesto_monto`, `total`, `precio_unitario`, `subtotal`, `costo_unitario` de la línea) → string con 2 decimales.
 - `descuento_tipo`, `impuesto_tipo` → `"porcentaje"`, `"valor"` o `null`.
 - `fecha`, `fecha_entrega` → `YYYY-MM-DD` sin hora ni zona (no se desplazan un día).
 - `entregado_en`, `created_at`, `updated_at` → ISO 8601 en UTC o `null`.

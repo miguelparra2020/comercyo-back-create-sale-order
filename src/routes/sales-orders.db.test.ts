@@ -247,6 +247,7 @@ describe('sales orders against the real database (rolled back)', () => {
         cantidad: 3,
         precio_unitario: '2000.00',
         subtotal: '6000.00',
+        costo_unitario: '1000.00',
       },
       {
         id_sales_order_line: expect.any(String),
@@ -256,6 +257,7 @@ describe('sales orders against the real database (rolled back)', () => {
         cantidad: 2,
         precio_unitario: '18000.00',
         subtotal: '36000.00',
+        costo_unitario: '1000.00',
       },
     ]);
 
@@ -269,6 +271,20 @@ describe('sales orders against the real database (rolled back)', () => {
     // El siguiente pedido del proyecto toma el número siguiente.
     const next = await crear();
     expect(Number(next.numero.slice(4))).toBe(Number(data.numero.slice(4)) + 1);
+  });
+
+  it('costo_unitario: lo pone la BD con el costo del producto y no cambia si el costo sube', async () => {
+    const data = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 2, costo_unitario: 1 }] });
+    expect(data.lineas[0].costo_unitario).toBe('1000.00');
+
+    await query('UPDATE productos SET precio_costo = 4000 WHERE id_product = $1', [F.cuaderno]);
+    const got = await call(a, `/sales-orders/${data.id_sales_order}`);
+    expect(got.body.data.lineas[0].costo_unitario).toBe('1000.00');
+
+    // Un pedido nuevo toma el costo de ese momento.
+    const nuevo = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 1 }] });
+    expect(nuevo.lineas[0].costo_unitario).toBe('4000.00');
+    await query('UPDATE productos SET precio_costo = 1000 WHERE id_product = $1', [F.cuaderno]);
   });
 
   it('precio_unitario null o ausente usa el precio_venta_linea del producto', async () => {
