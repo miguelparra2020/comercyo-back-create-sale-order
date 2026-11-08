@@ -380,6 +380,15 @@ Cada devolución trae `numero` (DV-0001 por proyecto), `fecha`, `motivo`, `mueve
 `{ "resolucion": "Reposición" | "Reintegro", "fecha", "metodo"?, "monto"?, "referencia"? }` (409
 `FV_DEV_YA_RESUELTA`, 409 `FV_DEV_REINTEGRO_EXCEDE`, 409 `FV_DEV_STOCK_INSUFICIENTE`, 404 `FV_DEV_NO_ENCONTRADA`).
 
+### Editar la factura de venta
+
+`PUT /sales-orders/:id/invoice` con `{ fecha_emision, fecha_vencimiento, notas? }`. Migración `20261108010000_editar_facturas`.
+
+- Solo cambian las fechas y las notas de la factura vigente. El total, las líneas, el inventario y el cliente siguen igual.
+- Si la factura está anulada: `FV_FACTURA_ANULADA`.
+- La fecha no puede quedar después del primer abono vigente, devolución o gasto de la factura: `FV_FECHA_DESPUES_DE_MOVIMIENTOS`.
+- El vencimiento debe ser igual o posterior a la fecha de la factura: `FV_FACTURA_VENCIMIENTO_ANTERIOR`.
+
 ### Vendedores y gastos de la factura
 
 Migración `20261107200000_vendedores_gastos_factura_venta`.

@@ -842,6 +842,23 @@ describe('sales orders against the real database (rolled back)', () => {
       await query('UPDATE productos SET stock = 1000 WHERE id_product = $1', [F.cuaderno]);
     });
 
+    it('edita fechas y notas de la factura; no después del primer abono; otro proyecto no la ve', async () => {
+      const ped = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 1 }] });
+      expect((await facturar(ped.id_sales_order)).status).toBe(200);
+      const url = `/sales-orders/${ped.id_sales_order}/invoice`;
+      const ayer = new Date(Date.parse(`${hoy}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
+      const editado = await call(a, url, 'PUT', { fecha_emision: ayer, fecha_vencimiento: hoy, notas: ' Ajustada ' });
+      expect(editado.status, JSON.stringify(editado.body)).toBe(200);
+      expect(editado.body.data.factura).toMatchObject({ fecha_emision: ayer, fecha_vencimiento: hoy, notas: 'Ajustada', total: ped.total });
+      expect(await call(a, url, 'PUT', { fecha_emision: hoy, fecha_vencimiento: ayer })).toMatchObject({ status: 400, body: { code: 'FV_FACTURA_VENCIMIENTO_ANTERIOR' } });
+
+      const pago = await call(a, `/sales-orders/${ped.id_sales_order}/payments`, 'POST', { fecha: ayer, metodo: 'Efectivo', monto: 100 });
+      expect(pago.status, JSON.stringify(pago.body)).toBe(201);
+      expect(await call(a, url, 'PUT', { fecha_emision: hoy, fecha_vencimiento: hoy })).toMatchObject({ status: 400, body: { code: 'FV_FECHA_DESPUES_DE_MOVIMIENTOS' } });
+      expect(await call(b, url, 'PUT', { fecha_emision: ayer, fecha_vencimiento: hoy })).toMatchObject({ status: 404 });
+    });
+
     it('vendedores y gastos: comisión sobre la ganancia al final, sobre la venta y fija; baja la ganancia', async () => {
       const ped = await crear({ lineas: [{ id_product: F.cuaderno, cantidad: 2 }] });
       const venta = Number(ped.subtotal) - Number(ped.descuento_monto ?? 0);

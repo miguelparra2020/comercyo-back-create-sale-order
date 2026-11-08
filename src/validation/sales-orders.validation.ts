@@ -398,6 +398,44 @@ export const InvoiceBodySchema = z
 
 export type InvoiceBody = z.output<typeof InvoiceBodySchema>;
 
+// PUT /sales-orders/:id/invoice: only the dates and notes of the live invoice
+// change (total, lines, stock and customer stay). The DB refuses a voided
+// invoice (FV_FACTURA_ANULADA) and a date after its first live payment, return
+// or cost (FV_FECHA_DESPUES_DE_MOVIMIENTOS).
+export const UpdateInvoiceBodySchema = z
+  .object(
+    {
+      fecha_emision: dateField(
+        'La fecha de la factura es obligatoria',
+        'La fecha de la factura debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-11-06' }),
+      fecha_vencimiento: dateField(
+        'La fecha de vencimiento es obligatoria',
+        'La fecha de vencimiento debe tener el formato YYYY-MM-DD y ser válida'
+      ).openapi({ example: '2026-12-06', description: 'Igual o posterior a fecha_emision' }),
+      notas: z
+        .string({ error: MSG.notasTexto })
+        .trim()
+        .max(NOTAS_MAX, MSG.notasMax)
+        .nullish()
+        .transform((value) => value ?? '')
+        .openapi({ example: 'Pago a 30 días' }),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((body, ctx) => {
+    if (isValidDate(body.fecha_emision) && isValidDate(body.fecha_vencimiento) && body.fecha_vencimiento < body.fecha_emision) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['fecha_vencimiento'],
+        message: MSG_VENCIMIENTO_ANTERIOR,
+        params: { code: 'FV_FACTURA_VENCIMIENTO_ANTERIOR' },
+      });
+    }
+  });
+
+export type UpdateInvoiceBody = z.output<typeof UpdateInvoiceBodySchema>;
+
 export const METODOS_PAGO = ['Transferencia', 'Efectivo'] as const;
 export type MetodoPago = (typeof METODOS_PAGO)[number];
 
