@@ -11,6 +11,7 @@ import {
   formatIssue,
   IdParamSchema,
   InvoiceBodySchema,
+  UpdateInvoiceBodySchema,
   issueCode,
   ListQuerySchema,
   OrderBodySchema,
@@ -292,6 +293,24 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     },
   });
 
+  const updateInvoiceRoute = createRoute({
+    ...common,
+    method: 'put',
+    path: '/sales-orders/{id}/invoice',
+    summary: 'Editar la factura de venta: fecha de emisión, vencimiento y notas',
+    description: [
+      'El total, las líneas, el inventario y el cliente no cambian.',
+      'Errores: 409 FV_PEDIDO_NO_FACTURADO, 409 FV_FACTURA_ANULADA,',
+      '400 FV_FECHA_DESPUES_DE_MOVIMIENTOS (después del primer abono vigente, devolución o gasto),',
+      '400 FV_FACTURA_VENCIMIENTO_ANTERIOR.',
+    ].join('\n'),
+    request: { params: IdParamSchema, body: { ...json(UpdateInvoiceBodySchema), required: true } },
+    responses: {
+      200: { description: 'Pedido con su factura actualizada', ...json(SalesOrderResponseSchema) },
+      ...errorResponses,
+    },
+  });
+
   const deleteRoute = createRoute({
     ...common,
     method: 'delete',
@@ -358,6 +377,17 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     if (response) return response;
     try {
       const data = await service.invoiceSalesOrder(getUsersDb(), scopeOf(c), c.req.param('id'), input);
+      return c.json({ success: true, data }, 200);
+    } catch (err) {
+      return respondError(c, err);
+    }
+  });
+
+  apiV1.openapi(updateInvoiceRoute, async (c: Ctx) => {
+    const { input, response } = await parseOrderBody(c, UpdateInvoiceBodySchema);
+    if (response) return response;
+    try {
+      const data = await service.updateSalesInvoice(getUsersDb(), scopeOf(c), c.req.param('id'), input);
       return c.json({ success: true, data }, 200);
     } catch (err) {
       return respondError(c, err);

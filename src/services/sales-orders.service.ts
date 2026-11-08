@@ -2,10 +2,12 @@ import type { Pool, PoolClient } from 'pg';
 import { escapeLike } from '../lib/like';
 import { orderNotFound } from '../lib/pv-errors';
 import { withTransaction } from '../lib/transaction';
+import { findInvoiceId } from './sales-invoice-payments.service';
 import {
   AJUSTES_COLUMNS,
   type Estado,
   type InvoiceBody,
+  type UpdateInvoiceBody,
   type ListQuery,
   type OrderBody,
   type OrderLineInput,
@@ -459,6 +461,19 @@ export const invoiceSalesOrder = (db: Db, scope: Scope, id: string, input: Invoi
          (id_own_project, id_sales_order, fecha_emision, fecha_vencimiento, notas, descuenta_inventario, created_by_user_id)
        VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7)`,
       [scope.id_own_project, id, input.fecha_emision, input.fecha_vencimiento, input.notas, input.descuenta_inventario, scope.id_user]
+    );
+    return reread(client, id, scope);
+  });
+
+// Edit the dates and notes of the live invoice of the order.
+export const updateSalesInvoice = (db: Db, scope: Scope, id: string, input: UpdateInvoiceBody) =>
+  withTransaction(db, async (client) => {
+    const idInvoice = await findInvoiceId(client, scope.id_own_project, id);
+    await client.query(
+      `UPDATE sales_invoices
+          SET fecha_emision = $2::date, fecha_vencimiento = $3::date, notas = $4, updated_by_user_id = $5
+        WHERE id_sales_invoice = $1::bigint`,
+      [idInvoice, input.fecha_emision, input.fecha_vencimiento, input.notas, scope.id_user]
     );
     return reread(client, id, scope);
   });
