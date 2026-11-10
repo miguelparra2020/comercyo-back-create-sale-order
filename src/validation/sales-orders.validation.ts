@@ -322,6 +322,9 @@ export const ListQuerySchema = z
       .enum(['true', 'false'], { error: 'atrasado debe ser true o false' })
       .optional()
       .transform((v) => (v === undefined ? undefined : v === 'true')),
+    origen: z
+      .enum(['Manual', 'Marketplace'], { error: 'origen debe ser Manual o Marketplace' })
+      .optional(),
     fecha_desde: optionalDateQuery('fecha_desde'),
     fecha_hasta: optionalDateQuery('fecha_hasta'),
     page: z.coerce

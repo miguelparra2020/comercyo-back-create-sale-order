@@ -105,6 +105,9 @@ const SalesOrderSchema = z
     atrasado: z.boolean().openapi({
       description: 'Calculado por la BD con current_date (UTC). Solo informativo, no se usa en reglas de negocio.',
     }),
+    origen: z.enum(['Manual', 'Marketplace']).openapi({
+      description: 'Dónde se tomó el pedido: Manual (creado en Pedidos de venta) o Marketplace (lo hizo el cliente desde la tienda pública).',
+    }),
     entregado_en: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string().nullable(),

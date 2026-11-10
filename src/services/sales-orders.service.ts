@@ -70,6 +70,17 @@ export type SalesInvoiceDto = {
   dias_vencida: number | null;
 };
 
+export const ORIGENES_PEDIDO = ['Manual', 'Marketplace'] as const;
+export type OrigenPedido = (typeof ORIGENES_PEDIDO)[number];
+
+// Un pedido es del marketplace si el checkout del carrito (comercyo-back-cart)
+// le dejó su fila en marketplace_orders; si no, se creó a mano. Las lecturas
+// hacen LEFT JOIN marketplace_orders mo (ORIGEN_JOINED); el WHERE de la lista y
+// el RETURNING del borrado, que no tienen el join, usan ORIGEN_EXPRESSION.
+const ORIGEN_EXPRESSION = `CASE WHEN EXISTS (SELECT 1 FROM marketplace_orders mo WHERE mo.id_sales_order = so.id_sales_order)
+  THEN 'Marketplace' ELSE 'Manual' END`;
+const ORIGEN_JOINED = `CASE WHEN mo.id_sales_order IS NULL THEN 'Manual' ELSE 'Marketplace' END`;
+
 export type SalesOrderDto = {
   id_sales_order: string;
   id_own_project: number;
@@ -92,6 +103,8 @@ export type SalesOrderDto = {
   impuesto_monto: string;
   total: string;
   atrasado: boolean;
+  // Dónde se tomó: a mano en Pedidos de venta o por el cliente en el marketplace.
+  origen: OrigenPedido;
   entregado_en: string | null;
   created_at: string;
   updated_at: string | null;
@@ -107,7 +120,7 @@ export type SalesOrderDto = {
 // would otherwise parse a `date` into a JS Date at local midnight, which
 // shifts a day when serialized to UTC. bigint/numeric are cast to text so
 // they never lose precision.
-const orderColumns = (atrasado: string) => `
+const orderColumns = (atrasado: string, origen: string) => `
   so.id_sales_order::text AS id_sales_order,
   so.id_own_project::text AS id_own_project,
   so.numero,
@@ -127,6 +140,7 @@ const orderColumns = (atrasado: string) => `
   so.impuesto_monto::text AS impuesto_monto,
   so.total::text AS total,
   ${atrasado} AS atrasado,
+  ${origen} AS origen,
   so.entregado_en,
   so.created_at,
   so.updated_at
@@ -154,8 +168,9 @@ const FACTURA_COLUMNS = `
   CASE WHEN vi.abonado + dev.reintegrado >= vi.total THEN NULL ELSE vi.dias_vencida END AS factura_dias_vencida
 `;
 
-const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado')}, ${FACTURA_COLUMNS}
+const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)}, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
+  LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
   LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL
   LEFT JOIN LATERAL (
     -- Reintegros de devoluciones: con ellos la factura puede quedar pagada sin abonos completos.
@@ -257,6 +272,7 @@ export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto
   impuesto_monto: String(row.impuesto_monto),
   total: String(row.total),
   atrasado: row.atrasado === true,
+  origen: row.origen === 'Marketplace' ? 'Marketplace' : 'Manual',
   entregado_en: toIso(row.entregado_en),
   created_at: toIso(row.created_at),
   updated_at: toIso(row.updated_at),
@@ -309,7 +325,7 @@ export const getSalesOrder = async (db: Db, id: string, id_own_project: number) 
 };
 
 export const listSalesOrders = async (db: Db, id_own_project: number, query: ListQuery) => {
-  const { search, estado, id_customer, atrasado, fecha_desde, fecha_hasta, page, limit } = query;
+  const { search, estado, id_customer, atrasado, origen, fecha_desde, fecha_hasta, page, limit } = query;
 
   const conditions = ['so.id_own_project = $1'];
   const values: unknown[] = [id_own_project];
@@ -324,6 +340,7 @@ export const listSalesOrders = async (db: Db, id_own_project: number, query: Lis
   if (estado) add((p) => `so.estado = ${p}::sales_order_status`, estado);
   if (id_customer) add((p) => `so.id_customer = ${p}::bigint`, id_customer);
   if (atrasado !== undefined) add((p) => `so.atrasado = ${p}::boolean`, atrasado);
+  if (origen) add((p) => `(${ORIGEN_EXPRESSION}) = ${p}::text`, origen);
   if (fecha_desde) add((p) => `so.fecha >= ${p}::date`, fecha_desde);
   if (fecha_hasta) add((p) => `so.fecha <= ${p}::date`, fecha_hasta);
 
@@ -485,7 +502,7 @@ export const deleteSalesOrder = async (db: Db, scope: Scope, id: string) => {
   const result = await db.query(
     `UPDATE sales_orders so SET deleted_at = now(), deleted_by_user_id = $1
      WHERE so.id_sales_order = $2 AND so.id_own_project = $3 AND so.deleted_at IS NULL
-     RETURNING ${orderColumns(ATRASADO_EXPRESSION)}`,
+     RETURNING ${orderColumns(ATRASADO_EXPRESSION, ORIGEN_EXPRESSION)}`,
     [scope.id_user, id, scope.id_own_project]
   );
   if (!result.rowCount) throw orderNotFound();
