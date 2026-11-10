@@ -105,6 +105,8 @@ export type SalesOrderDto = {
   atrasado: boolean;
   // Dónde se tomó: a mano en Pedidos de venta o por el cliente en el marketplace.
   origen: OrigenPedido;
+  // Condición de pago que eligió el cliente en el marketplace (null en los manuales y en los de antes).
+  condicion_pago: 'anticipado' | 'contra_entrega' | null;
   entregado_en: string | null;
   created_at: string;
   updated_at: string | null;
@@ -168,7 +170,7 @@ const FACTURA_COLUMNS = `
   CASE WHEN vi.abonado + dev.reintegrado >= vi.total THEN NULL ELSE vi.dias_vencida END AS factura_dias_vencida
 `;
 
-const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)}, ${FACTURA_COLUMNS}
+const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)}, mo.condicion_pago, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
   LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
   LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL
@@ -273,6 +275,7 @@ export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto
   total: String(row.total),
   atrasado: row.atrasado === true,
   origen: row.origen === 'Marketplace' ? 'Marketplace' : 'Manual',
+  condicion_pago: row.condicion_pago === 'anticipado' || row.condicion_pago === 'contra_entrega' ? row.condicion_pago : null,
   entregado_en: toIso(row.entregado_en),
   created_at: toIso(row.created_at),
   updated_at: toIso(row.updated_at),
