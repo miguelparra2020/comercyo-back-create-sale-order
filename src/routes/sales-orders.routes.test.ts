@@ -53,6 +53,7 @@ const orderRow = (overrides: Record<string, unknown> = {}) => ({
   impuesto_monto: '0.00',
   total: '51000.00',
   atrasado: false,
+  origen: 'Manual',
   entregado_en: null,
   created_at: new Date('2026-10-15T15:00:00.000Z'),
   updated_at: null,
@@ -239,6 +240,7 @@ describe('validación de la query de GET /sales-orders -> 400', () => {
     ['estado=Enviada', 'estado debe ser uno de: Pendiente, En preparación, En camino, Entregado, Cancelado'],
     ['id_customer=x', 'id_customer debe ser un entero positivo'],
     ['atrasado=si', 'atrasado debe ser true o false'],
+    ['origen=Dropi', 'origen debe ser Manual o Marketplace'],
     ['fecha_desde=2026-02-30', 'fecha_desde debe tener el formato YYYY-MM-DD y ser válida'],
     ['fecha_desde=2026-10-10&fecha_hasta=2026-10-01', 'fecha_desde no puede ser posterior a fecha_hasta'],
     ['page=0', 'page debe ser como mínimo 1'],
@@ -388,6 +390,7 @@ describe('GET /sales-orders', () => {
     ['atrasado=false', /so\.atrasado = \$2::boolean/, false],
     ['fecha_desde=2026-10-01', /so\.fecha >= \$2::date/, '2026-10-01'],
     ['fecha_hasta=2026-10-31', /so\.fecha <= \$2::date/, '2026-10-31'],
+    ['origen=Marketplace', /FROM marketplace_orders mo WHERE mo\.id_sales_order = so\.id_sales_order[\s\S]*= \$2::text/, 'Marketplace'],
   ])('filtro %s', async (qs, sqlPattern, param) => {
     happyDb();
     const res = await send(buildApp(), `/sales-orders?${qs}`);
@@ -463,6 +466,7 @@ describe('serialización', () => {
       impuesto_monto: '0.00',
       total: '51000.00',
       atrasado: false,
+      origen: 'Manual',
       entregado_en: '2026-10-17T20:30:00.000Z',
       created_at: '2026-10-15T15:00:00.000Z',
       updated_at: '2026-10-17T20:30:00.000Z',
