@@ -108,6 +108,9 @@ const SalesOrderSchema = z
     origen: z.enum(['Manual', 'Marketplace']).openapi({
       description: 'Dónde se tomó el pedido: Manual (creado en Pedidos de venta) o Marketplace (lo hizo el cliente desde la tienda pública).',
     }),
+    condicion_pago: z.enum(['anticipado', 'contra_entrega']).nullable().openapi({
+      description: 'Pedidos del marketplace: pago anticipado o contra entrega (lo eligió el cliente). null en los manuales.',
+    }),
     entregado_en: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string().nullable(),
