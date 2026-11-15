@@ -13,20 +13,24 @@ import { getSalesOrder, type Scope } from './sales-orders.service';
 type Db = Pick<Pool, 'query' | 'connect'>;
 type Queryable = Pick<Pool | PoolClient, 'query'>;
 
-// The store's walk-in customer, for buyers who don't give their details.
-// customers requires email/phone/address, so it gets placeholder ones; the
-// email carries the project id so it never clashes between stores.
-export const CLIENTE_MOSTRADOR = {
-  nombre: 'Cliente de mostrador',
-  telefono: '0000000',
-  direccion: 'Venta en mostrador',
+// "Consumidor final": the generic customer every store gets for buyers who
+// don't give their details (CC/NIT 22222222 on the receipt - printed by the
+// front, customers has no document column). customers requires
+// email/phone/address, so it gets placeholder ones; the email carries the
+// project id so it never clashes between stores, and stays the same as when
+// it was called "Cliente de mostrador" so those stores keep their customer.
+export const CONSUMIDOR_FINAL = {
+  nombre: 'Consumidor final',
+  documento: '22222222',
+  telefono: '2222222',
+  direccion: 'Consumidor final',
   email: (idOwnProject: number) => `mostrador+${idOwnProject}@comercyo.com`,
 };
 
-// Finds the walk-in customer, creating it on the store's first counter sale
+// Finds the store's Consumidor final, creating it on its first counter sale
 // (or bringing it back if someone deleted it).
-export const clienteMostrador = async (q: Queryable, scope: Scope): Promise<string> => {
-  const email = CLIENTE_MOSTRADOR.email(scope.id_own_project);
+export const consumidorFinal = async (q: Queryable, scope: Scope): Promise<string> => {
+  const email = CONSUMIDOR_FINAL.email(scope.id_own_project);
   const buscar = () =>
     q.query(
       `SELECT id_customer::text AS id_customer FROM customers
@@ -35,24 +39,31 @@ export const clienteMostrador = async (q: Queryable, scope: Scope): Promise<stri
       [scope.id_own_project, email]
     );
   let { rows } = await buscar();
-  if (rows[0]) return rows[0].id_customer;
+  if (rows[0]) {
+    // Stores that got it as "Cliente de mostrador" (first version) see the new name.
+    await q.query(
+      `UPDATE customers SET nombre = $2, direccion = $3 WHERE id_customer = $1::bigint AND nombre <> $2`,
+      [rows[0].id_customer, CONSUMIDOR_FINAL.nombre, CONSUMIDOR_FINAL.direccion]
+    );
+    return rows[0].id_customer;
+  }
 
   ({ rows } = await q.query(
     `INSERT INTO customers (id_own_project, nombre, email, telefono, direccion, created_by_user_id)
      VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT DO NOTHING
      RETURNING id_customer::text AS id_customer`,
-    [scope.id_own_project, CLIENTE_MOSTRADOR.nombre, email, CLIENTE_MOSTRADOR.telefono, CLIENTE_MOSTRADOR.direccion, scope.id_user]
+    [scope.id_own_project, CONSUMIDOR_FINAL.nombre, email, CONSUMIDOR_FINAL.telefono, CONSUMIDOR_FINAL.direccion, scope.id_user]
   ));
   if (rows[0]) return rows[0].id_customer;
 
   // The email is taken: a deleted walk-in customer (bring it back) or a sale
   // that created it at the same moment.
   ({ rows } = await q.query(
-    `UPDATE customers SET deleted_at = NULL, updated_by_user_id = $3
+    `UPDATE customers SET deleted_at = NULL, nombre = $4, updated_by_user_id = $3
       WHERE id_own_project = $1 AND email = $2
       RETURNING id_customer::text AS id_customer`,
-    [scope.id_own_project, email, scope.id_user]
+    [scope.id_own_project, email, scope.id_user, CONSUMIDOR_FINAL.nombre]
   ));
   if (rows[0]) return rows[0].id_customer;
   ({ rows } = await buscar());
@@ -63,7 +74,7 @@ const HOY_BOGOTA = `(now() AT TIME ZONE 'America/Bogota')::date`;
 
 export const createQuickSale = async (db: Db, scope: Scope, input: QuickSaleBody) => {
   const id = await withTransaction(db, async (client) => {
-    const idCustomer = input.id_customer ?? (await clienteMostrador(client, scope));
+    const idCustomer = input.id_customer ?? (await consumidorFinal(client, scope));
 
     const { rows } = await client.query(
       `INSERT INTO sales_orders
