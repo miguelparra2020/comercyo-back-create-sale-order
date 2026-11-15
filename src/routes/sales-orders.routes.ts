@@ -6,6 +6,7 @@ import { mapSalesOrderError, VALIDATION_CODE } from '../lib/pv-errors';
 import type { AuthVariables } from '../middlewares/auth.middleware';
 import type { OwnProjectVariables } from '../middlewares/require-own-project.middleware';
 import * as service from '../services/sales-orders.service';
+import { createQuickSale } from '../services/quick-sale.service';
 import {
   ESTADOS,
   formatIssue,
@@ -17,6 +18,7 @@ import {
   OrderBodySchema,
   TIPOS_AJUSTE,
   UpdateOrderBodySchema,
+  QuickSaleBodySchema,
 } from '../validation/sales-orders.validation';
 
 type Vars = AuthVariables & OwnProjectVariables;
@@ -344,6 +346,37 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     try {
       const data = await service.getSalesOrder(getUsersDb(), c.req.param('id'), c.get('id_own_project'));
       return c.json({ success: true, data }, 200);
+    } catch (err) {
+      return respondError(c, err);
+    }
+  });
+
+  const quickSaleRoute = createRoute({
+    ...common,
+    method: 'post',
+    path: '/sales-orders/quick-sale',
+    summary: 'Caja rápida: venta de mostrador entregada, facturada y pagada en un solo paso',
+    description: [
+      'En una transacción: crea el pedido con fecha de hoy, lo lleva a Entregado, emite la factura',
+      '(descuenta el inventario) y registra un abono por el total con el método elegido.',
+      'Sin id_customer la venta queda a nombre de "Cliente de mostrador" (se crea la primera vez).',
+      'Si algo falla (p. ej. 409 FV_STOCK_INSUFICIENTE) no queda nada guardado.',
+    ].join('\n'),
+    request: { body: { ...json(QuickSaleBodySchema), required: true } },
+    responses: {
+      201: { description: 'Pedido entregado, facturado y pagado', ...json(SalesOrderResponseSchema) },
+      400: errorResponses[400],
+      401: errorResponses[401],
+      409: errorResponses[409],
+    },
+  });
+
+  apiV1.openapi(quickSaleRoute, async (c: Ctx) => {
+    const { input, response } = await parseOrderBody(c, QuickSaleBodySchema);
+    if (response) return response;
+    try {
+      const data = await createQuickSale(getUsersDb(), scopeOf(c), input);
+      return c.json({ success: true, data }, 201);
     } catch (err) {
       return respondError(c, err);
     }
