@@ -468,6 +468,8 @@ describe('serialización', () => {
       atrasado: false,
       origen: 'Manual',
       condicion_pago: null,
+      entrega: null,
+      km_cobrados: null,
       entregado_en: '2026-10-17T20:30:00.000Z',
       created_at: '2026-10-15T15:00:00.000Z',
       updated_at: '2026-10-17T20:30:00.000Z',
