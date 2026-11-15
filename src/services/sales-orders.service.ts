@@ -111,6 +111,8 @@ export type SalesOrderDto = {
   entrega: 'domicilio' | 'recoger' | null;
   // Kilómetros cobrados en el domicilio del marketplace (null si no hubo kilometraje).
   km_cobrados: number | null;
+  // Franja de entrega que escogió el cliente del marketplace (el día va en fecha_entrega).
+  franja_entrega: 'manana' | 'tarde' | null;
   entregado_en: string | null;
   created_at: string;
   updated_at: string | null;
@@ -175,7 +177,7 @@ const FACTURA_COLUMNS = `
 `;
 
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)}, mo.condicion_pago,
-  CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, ${FACTURA_COLUMNS}
+  CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, mo.franja_entrega, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
   LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
   LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL
@@ -283,6 +285,7 @@ export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto
   condicion_pago: row.condicion_pago === 'anticipado' || row.condicion_pago === 'contra_entrega' ? row.condicion_pago : null,
   entrega: row.entrega === 'recoger' ? 'recoger' : row.entrega === 'domicilio' ? 'domicilio' : null,
   km_cobrados: row.km_cobrados === null || row.km_cobrados === undefined ? null : Number(row.km_cobrados),
+  franja_entrega: row.franja_entrega === 'manana' || row.franja_entrega === 'tarde' ? row.franja_entrega : null,
   entregado_en: toIso(row.entregado_en),
   created_at: toIso(row.created_at),
   updated_at: toIso(row.updated_at),
