@@ -28,7 +28,7 @@ const venta = (body: unknown) =>
   buildApp().request('/sales-orders/quick-sale', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 const orderRow = {
-  id_sales_order: '900', id_own_project: '12', numero: 'PED-0060', id_customer: '44', cliente_nombre: 'Cliente de mostrador',
+  id_sales_order: '900', id_own_project: '12', numero: 'PED-0060', id_customer: '44', cliente_nombre: 'Consumidor final',
   fecha: '2026-11-14', fecha_entrega: '2026-11-14', notas: '', estado: 'Entregado',
   descuento_tipo: null, descuento_valor: '0.00', impuesto_tipo: null, impuesto_valor: '0.00', costo_envio: '0.00',
   subtotal: '22400.00', descuento_monto: '0.00', impuesto_monto: '0.00', total: '22400.00',
@@ -38,6 +38,7 @@ const orderRow = {
 const happy = () =>
   db
     .on(/FROM customers/, { rows: [{ id_customer: '44' }] })
+    .on(/UPDATE customers SET nombre/, { rowCount: 0 })
     .on(/INSERT INTO sales_orders\b/, { rows: [{ id_sales_order: '900' }] })
     .on(/INSERT INTO sales_order_lines/, { rowCount: 1 })
     .on(/UPDATE sales_orders SET estado/, { rowCount: 1 })
@@ -52,15 +53,16 @@ beforeEach(() => {
 });
 
 describe('POST /sales-orders/quick-sale (Caja rápida)', () => {
-  it('sin cliente: usa el de mostrador, entrega, factura y paga el total en una transacción', async () => {
+  it('sin cliente: usa el Consumidor final, entrega, factura y paga el total en una transacción', async () => {
     happy();
     const res = await venta({ lineas: [{ id_product: 789, cantidad: 2, precio_unitario: 11200 }], metodo: 'Efectivo' });
 
     expect(res.status).toBe(201);
     const pasos = db.statements();
-    expect(pasos.slice(0, 10)).toEqual([
+    expect(pasos.slice(0, 11)).toEqual([
       'BEGIN',
       'SELECT customers',
+      'UPDATE customers.nombre',
       'INSERT sales_orders',
       'INSERT sales_order_lines',
       'UPDATE sales_orders.estado',
@@ -77,17 +79,17 @@ describe('POST /sales-orders/quick-sale (Caja rápida)', () => {
     expect((await res.json()).data).toMatchObject({ numero: 'PED-0060', estado: 'Entregado' });
   });
 
-  it('la primera venta de la tienda crea el Cliente de mostrador', async () => {
+  it('la primera venta de la tienda crea el Consumidor final', async () => {
     happy().on(/FROM customers/, { rows: [] }).on(/INSERT INTO customers/, { rows: [{ id_customer: '45' }] });
     await venta({ lineas: [{ id_product: 789, cantidad: 1 }], metodo: 'Transferencia', referencia: 'NEQUI-1' });
 
     const cliente = db.find(/INSERT INTO customers/)!;
-    expect(cliente.params).toEqual([ID_OWN_PROJECT, 'Cliente de mostrador', 'mostrador+12@comercyo.com', '0000000', 'Venta en mostrador', ID_USER]);
+    expect(cliente.params).toEqual([ID_OWN_PROJECT, 'Consumidor final', 'mostrador+12@comercyo.com', '2222222', 'Consumidor final', ID_USER]);
     expect(db.find(/INSERT INTO sales_orders\b/)!.params[1]).toBe('45');
     expect(db.find(/INSERT INTO sales_invoice_payments/)!.params[4]).toBe('NEQUI-1');
   });
 
-  it('con cliente no busca el de mostrador', async () => {
+  it('con cliente no busca el Consumidor final', async () => {
     happy();
     await venta({ id_customer: '5', lineas: [{ id_product: 789, cantidad: 1 }], metodo: 'Efectivo' });
     expect(db.find(/customers/)).toBeUndefined();
@@ -106,5 +108,14 @@ describe('POST /sales-orders/quick-sale (Caja rápida)', () => {
     const res = await venta({ lineas: [], metodo: 'Bitcoin' });
     expect(res.status).toBe(400);
     expect(db.calls).toHaveLength(0);
+  });
+});
+
+describe('Consumidor final ya creado como "Cliente de mostrador"', () => {
+  it('lo renombra y lo usa', async () => {
+    happy().on(/UPDATE customers SET nombre/, { rowCount: 1 });
+    await venta({ lineas: [{ id_product: 789, cantidad: 1 }], metodo: 'Efectivo' });
+    const renombre = db.find(/UPDATE customers SET nombre/)!;
+    expect(renombre.params).toEqual(['44', 'Consumidor final', 'Consumidor final']);
   });
 });

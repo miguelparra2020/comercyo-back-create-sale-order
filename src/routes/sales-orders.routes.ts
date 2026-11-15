@@ -359,7 +359,7 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     description: [
       'En una transacción: crea el pedido con fecha de hoy, lo lleva a Entregado, emite la factura',
       '(descuenta el inventario) y registra un abono por el total con el método elegido.',
-      'Sin id_customer la venta queda a nombre de "Cliente de mostrador" (se crea la primera vez).',
+      'Sin id_customer la venta queda a nombre de "Consumidor final" (se crea la primera vez).',
       'Si algo falla (p. ej. 409 FV_STOCK_INSUFICIENTE) no queda nada guardado.',
     ].join('\n'),
     request: { body: { ...json(QuickSaleBodySchema), required: true } },

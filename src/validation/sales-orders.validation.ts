@@ -824,14 +824,14 @@ export const ExpenseIdParamSchema = IdParamSchema.extend({
 
 // POST /sales-orders/quick-sale (Caja rápida): lines, an optional discount
 // and how the customer paid. Dates are today (Bogotá); without id_customer the
-// sale goes to the store's "Cliente de mostrador".
+// sale goes to the store's "Consumidor final".
 export const QuickSaleBodySchema = z
   .object(
     {
       id_customer: z
         .preprocess((value) => (value === null || value === '' ? undefined : value), bigintId(MSG.cliente, MSG.clienteInvalido).optional())
         .transform((value) => value ?? null)
-        .openapi({ type: 'string', example: '5', description: 'Opcional: sin cliente va a "Cliente de mostrador"' }),
+        .openapi({ type: 'string', example: '5', description: 'Opcional: sin cliente va a "Consumidor final"' }),
       notas: ORDER_FIELDS.notas,
       lineas: ORDER_FIELDS.lineas,
       descuento_tipo: AJUSTES_CREAR.descuento_tipo,
