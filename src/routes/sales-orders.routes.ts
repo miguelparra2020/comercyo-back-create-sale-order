@@ -111,6 +111,10 @@ const SalesOrderSchema = z
     condicion_pago: z.enum(['anticipado', 'contra_entrega']).nullable().openapi({
       description: 'Pedidos del marketplace: pago anticipado o contra entrega (lo eligió el cliente). null en los manuales.',
     }),
+    entrega: z.enum(['domicilio', 'recoger']).nullable().openapi({
+      description: 'Pedidos del marketplace: domicilio o el cliente recoge en la tienda. null en los manuales.',
+    }),
+    km_cobrados: z.number().nullable().openapi({ description: 'Kilómetros cobrados en el domicilio del marketplace' }),
     entregado_en: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string().nullable(),
