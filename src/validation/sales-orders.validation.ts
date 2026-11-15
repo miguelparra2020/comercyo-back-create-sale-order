@@ -821,3 +821,32 @@ export const ExpenseIdParamSchema = IdParamSchema.extend({
     .refine(isPositiveBigintId, 'El id del gasto debe ser un entero positivo')
     .openapi({ param: { name: 'idGasto', in: 'path' }, example: '7' }),
 });
+
+// POST /sales-orders/quick-sale (Caja rápida): lines, an optional discount
+// and how the customer paid. Dates are today (Bogotá); without id_customer the
+// sale goes to the store's "Cliente de mostrador".
+export const QuickSaleBodySchema = z
+  .object(
+    {
+      id_customer: z
+        .preprocess((value) => (value === null || value === '' ? undefined : value), bigintId(MSG.cliente, MSG.clienteInvalido).optional())
+        .transform((value) => value ?? null)
+        .openapi({ type: 'string', example: '5', description: 'Opcional: sin cliente va a "Cliente de mostrador"' }),
+      notas: ORDER_FIELDS.notas,
+      lineas: ORDER_FIELDS.lineas,
+      descuento_tipo: AJUSTES_CREAR.descuento_tipo,
+      descuento_valor: AJUSTES_CREAR.descuento_valor,
+      metodo: z.enum(METODOS_PAGO, { error: MSG_PAGO.metodo }).openapi({ example: 'Efectivo' }),
+      referencia: z
+        .string({ error: 'La referencia debe ser texto' })
+        .trim()
+        .max(REFERENCIA_PAGO_MAX, MSG_PAGO.referencia)
+        .nullish()
+        .transform((value) => value ?? ''),
+    },
+    BODY_NOT_OBJECT
+  )
+  .superRefine((body, ctx) => refineOrder(body as unknown as RefineInput, ctx))
+  .openapi('QuickSaleBody');
+
+export type QuickSaleBody = z.output<typeof QuickSaleBodySchema>;
