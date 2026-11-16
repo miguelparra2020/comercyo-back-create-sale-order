@@ -176,10 +176,14 @@ const FACTURA_COLUMNS = `
   CASE WHEN vi.abonado + dev.reintegrado >= vi.total THEN NULL ELSE vi.dias_vencida END AS factura_dias_vencida
 `;
 
-const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)}, mo.condicion_pago,
+// Condición de pago: la del cliente en el marketplace o, en los manuales, la
+// que puso la tienda (sales_orders.condicion_pago, tarea 8; la vista no la trae).
+const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)},
+  coalesce(mo.condicion_pago, sx.condicion_pago) AS condicion_pago,
   CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, mo.franja_entrega, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
   LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
+  LEFT JOIN sales_orders sx ON sx.id_sales_order = so.id_sales_order
   LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL
   LEFT JOIN LATERAL (
     -- Reintegros de devoluciones: con ellos la factura puede quedar pagada sin abonos completos.
@@ -412,8 +416,8 @@ export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
     const { rows } = await client.query(
       `INSERT INTO sales_orders
          (id_own_project, id_customer, fecha, fecha_entrega, notas, created_by_user_id,
-          descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio)
-       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric)
+          descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio, condicion_pago)
+       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric, $12)
        RETURNING id_sales_order::text AS id_sales_order`,
       [
         scope.id_own_project,
@@ -423,6 +427,7 @@ export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
         input.notas,
         scope.id_user,
         ...AJUSTES_COLUMNS.map((column) => input[column]),
+        input.condicion_pago ?? null,
       ]
     );
     const id = rows[0].id_sales_order as string;
@@ -443,6 +448,10 @@ export const updateSalesOrder = (db: Db, scope: Scope, id: string, input: Update
       values.push(input[column]);
       return `, ${column} = $${values.length}${column.endsWith('_tipo') ? '' : '::numeric'}`;
     });
+    if (input.condicion_pago !== undefined) {
+      values.push(input.condicion_pago);
+      ajustes.push(`, condicion_pago = $${values.length}`);
+    }
     const n = values.length;
     const header = await client.query(
       `UPDATE sales_orders

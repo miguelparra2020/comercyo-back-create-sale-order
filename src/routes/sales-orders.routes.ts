@@ -111,7 +111,7 @@ const SalesOrderSchema = z
       description: 'Dónde se tomó el pedido: Manual (creado en Pedidos de venta) o Marketplace (lo hizo el cliente desde la tienda pública).',
     }),
     condicion_pago: z.enum(['anticipado', 'contra_entrega']).nullable().openapi({
-      description: 'Pedidos del marketplace: pago anticipado o contra entrega (lo eligió el cliente). null en los manuales.',
+      description: 'Pago anticipado o contra entrega: en el marketplace lo elige el cliente; en los manuales lo pone la tienda. null si no se definió.',
     }),
     entrega: z.enum(['domicilio', 'recoger']).nullable().openapi({
       description: 'Pedidos del marketplace: domicilio o el cliente recoge en la tienda. null en los manuales.',

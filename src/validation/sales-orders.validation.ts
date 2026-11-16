@@ -282,10 +282,20 @@ const refineOrder = (body: RefineInput, ctx: z.RefinementCtx) => {
 };
 
 // POST /sales-orders
-export const OrderBodySchema = z.object({ ...ORDER_FIELDS, ...AJUSTES_CREAR }, BODY_NOT_OBJECT).superRefine(refineOrder);
+// Tarea 8: condición de pago también en los pedidos manuales (en los del
+// marketplace la escoge el cliente y esa es la que se muestra).
+const condicionPago = z
+  .enum(['anticipado', 'contra_entrega'], { error: "La condición de pago debe ser 'anticipado' o 'contra_entrega'" })
+  .nullable()
+  .openapi({ description: "Pedidos manuales: 'anticipado', 'contra_entrega' o null (sin definir)." });
+
+export const OrderBodySchema = z
+  .object({ ...ORDER_FIELDS, ...AJUSTES_CREAR, condicion_pago: condicionPago.default(null) }, BODY_NOT_OBJECT)
+  .superRefine(refineOrder);
 // PUT /sales-orders/:id
 export const UpdateOrderBodySchema = z
-  .object({ ...ORDER_FIELDS, ...AJUSTES_EDITAR }, BODY_NOT_OBJECT)
+  // Omitida en el PUT: conserva la que tiene (un cliente viejo no la borra).
+  .object({ ...ORDER_FIELDS, ...AJUSTES_EDITAR, condicion_pago: condicionPago.optional() }, BODY_NOT_OBJECT)
   .superRefine(refineOrder);
 
 export type OrderBody = z.output<typeof OrderBodySchema>;

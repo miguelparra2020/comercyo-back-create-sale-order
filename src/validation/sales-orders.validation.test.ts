@@ -59,6 +59,7 @@ describe('OrderBodySchema', () => {
       impuesto_tipo: null,
       impuesto_valor: 0,
       costo_envio: 0,
+      condicion_pago: null,
     });
   });
 
@@ -76,6 +77,7 @@ describe('OrderBodySchema', () => {
       })
     ) as Record<string, unknown>;
     expect(Object.keys(parsed).sort()).toEqual([
+      'condicion_pago',
       'costo_envio',
       'descuento_tipo',
       'descuento_valor',
@@ -300,3 +302,19 @@ describe('IdParamSchema', () => {
     expect(formatIssue(parsed.error!.issues)).toBe('El id debe ser un entero positivo');
   });
 });
+
+describe('condición de pago en pedidos manuales (tarea 8)', () => {
+  it('POST la acepta o queda en null; PUT omitida no la toca', () => {
+    expect(OrderBodySchema.parse(body({ condicion_pago: 'contra_entrega' })).condicion_pago).toBe('contra_entrega');
+    expect(OrderBodySchema.parse(body({})).condicion_pago).toBeNull();
+    expect(UpdateOrderBodySchema.parse(body({})).condicion_pago).toBeUndefined();
+    expect(UpdateOrderBodySchema.parse(body({ condicion_pago: null })).condicion_pago).toBeNull();
+  });
+
+  it('rechaza valores desconocidos con un mensaje en español', () => {
+    const r = OrderBodySchema.safeParse(body({ condicion_pago: 'credito' }));
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toContain("La condición de pago debe ser 'anticipado' o 'contra_entrega'");
+  });
+});
+

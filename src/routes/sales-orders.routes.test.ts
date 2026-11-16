@@ -275,7 +275,7 @@ describe('POST /sales-orders', () => {
     expect(insert.sql).toMatch(/created_by_user_id/);
     expect(insert.sql).toMatch(/RETURNING/);
     // sin ajustes en el body -> null / 0
-    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, null, 0, null, 0, 0]);
+    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, null, 0, null, 0, 0, null]);
     // id_product normalizado a string; sin precio -> null (la BD usa precio_venta_linea)
     expect(db.find(P.insertLines)!.params).toEqual([ORDER_ID, ['789', '790'], [2, 1], [18000, null]]);
     expect(db.find(P.insertLines)!.sql).toMatch(/WITH ORDINALITY[\s\S]*ORDER BY l\.ord/);
@@ -784,7 +784,7 @@ describe('ajustes: descuento, impuesto y envío', () => {
     expect(res.status).toBe(201);
     const insert = db.find(P.insertOrder)!;
     expect(insert.sql).toMatch(/descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio/);
-    expect(insert.params.slice(6)).toEqual(['porcentaje', 10, 'porcentaje', 19, 8000]);
+    expect(insert.params.slice(6)).toEqual(['porcentaje', 10, 'porcentaje', 19, 8000, null]);
     for (const call of writeSql()) {
       const columns = call.sql.split(/RETURNING|SELECT|WHERE/i)[0];
       expect(columns).not.toMatch(/\b(subtotal|descuento_monto|impuesto_monto|total)\b/);
@@ -799,6 +799,23 @@ describe('ajustes: descuento, impuesto y envío', () => {
       'COMMIT',
     ]);
     expect((await res.json()).data).toMatchObject(AJUSTADO);
+  });
+
+  it('condición de pago (tarea 8): POST la guarda y PUT la cambia; omitida no se toca', async () => {
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), '/sales-orders', 'POST', validBody({ condicion_pago: 'anticipado' }));
+    expect(db.find(P.insertOrder)!.sql).toMatch(/costo_envio, condicion_pago\)/);
+    expect(db.find(P.insertOrder)!.params.at(-1)).toBe('anticipado');
+
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({ condicion_pago: 'contra_entrega' }));
+    const update = db.find(P.updateHeader)!;
+    expect(update.sql).toMatch(/condicion_pago = \$\d+/);
+    expect(update.params).toContain('contra_entrega');
+
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({}));
+    expect(db.calls.filter((c) => P.updateHeader.test(c.sql)).at(-1)!.sql).not.toMatch(/condicion_pago/);
   });
 
   it('PUT escribe los 5 campos en el UPDATE de la cabecera, antes de reemplazar las líneas', async () => {
