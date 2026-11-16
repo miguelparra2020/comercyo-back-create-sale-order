@@ -103,6 +103,7 @@ describe('toOrderDto', () => {
         {
           id_sales_order_line: '456',
           id_product: '789',
+          id_service: null,
           producto_nombre: 'Resma carta',
           referencia: 'RES-CARTA',
           cantidad: 2,
@@ -133,5 +134,13 @@ describe('toOrderDto', () => {
     expect(toOrderDto({ atrasado: null }, []).atrasado).toBe(false);
     expect(toOrderDto({ atrasado: 't' }, []).atrasado).toBe(false);
     expect(toOrderDto({ atrasado: true }, []).atrasado).toBe(true);
+  });
+});
+
+describe('líneas de servicio (tarea 12)', () => {
+  it('una línea sin producto sale con id_product null y su id_service', () => {
+    expect(
+      toLineDto({ id_sales_order_line: '9', id_product: null, id_service: '42', producto_nombre: 'Corte', referencia: 'SERV-42', cantidad: 1, precio_unitario: '25000.00', subtotal: '25000.00', costo_unitario: '0.00' })
+    ).toMatchObject({ id_product: null, id_service: '42', producto_nombre: 'Corte', costo_unitario: '0.00' });
   });
 });

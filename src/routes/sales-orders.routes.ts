@@ -40,7 +40,8 @@ const ErrorSchema = z
 const LineaResponseSchema = z
   .object({
     id_sales_order_line: z.string().openapi({ example: '456' }),
-    id_product: z.string().openapi({ example: '789' }),
+    id_product: z.string().nullable().openapi({ example: '789', description: 'null en una línea de servicio (cobro de citas)' }),
+    id_service: z.string().nullable().openapi({ example: null, description: 'Servicio cobrado (tarea 12); null en líneas de producto' }),
     producto_nombre: z.string().openapi({ example: 'Resma carta' }),
     referencia: z.string().openapi({ example: 'RES-CARTA' }),
     cantidad: z.number().openapi({ example: 2 }),
