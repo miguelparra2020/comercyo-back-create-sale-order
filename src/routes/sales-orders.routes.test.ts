@@ -942,3 +942,14 @@ describe('ajustes: descuento, impuesto y envío', () => {
     }
   });
 });
+
+describe('GET /sales-orders/delivery-routes (tarea 56)', () => {
+  it('responde la ruta de la tienda (no se confunde con /sales-orders/{id})', async () => {
+    db.on(/FROM store_info/, { rows: [{ latitud: '4.8', longitud: '-75.7', direccion: 'Cra 7' }] });
+    db.on(/FROM sales_orders so\s+JOIN customers/, { rows: [] });
+    const res = await send(buildApp(), '/sales-orders/delivery-routes');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, data: { origen: { direccion: 'Cra 7', ubicacion: { lat: 4.8, lng: -75.7 } }, paradas: [] } });
+    expect(db.find(/FROM sales_orders so/)!.params).toEqual([ID_OWN_PROJECT]);
+  });
+});
