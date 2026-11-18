@@ -8,6 +8,7 @@ import type { OwnProjectVariables } from '../middlewares/require-own-project.mid
 import * as service from '../services/sales-orders.service';
 import { createQuickSale } from '../services/quick-sale.service';
 import { getDeliveryRoutes } from '../services/delivery-routes.service';
+import { getHistorialVenta } from '../services/historial.service';
 import {
   ESTADOS,
   formatIssue,
@@ -380,6 +381,37 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
   apiV1.openapi(deliveryRoutesRoute, async (c: Ctx) =>
     c.json({ success: true as const, data: await getDeliveryRoutes(getUsersDb(), c.get('id_own_project')) }, 200)
   );
+
+  // Tarea 57: historial del pedido (de lo primero a lo último).
+  const HistorialSchema = z.object({
+    success: z.literal(true),
+    data: z.object({
+      pedido: z.object({ id: z.string(), numero: z.string(), tercero: z.string(), estado: z.string(), total: z.number(), origen: z.string().nullable() }),
+      eventos: z.array(
+        z.object({
+          fecha: z.string(),
+          tipo: z.enum(['creado', 'estado', 'factura', 'factura_anulada', 'pago', 'pago_anulado', 'devolucion']),
+          titulo: z.string(),
+          detalle: z.string().nullable(),
+        })
+      ),
+    }),
+  });
+  const historyRoute = createRoute({
+    ...common,
+    method: 'get',
+    path: '/sales-orders/{id}/history',
+    summary: 'Historial del pedido: creación, estados, factura, pagos y devoluciones, por fecha y hora',
+    request: { params: IdParamSchema },
+    responses: { 200: { description: 'Historial', ...json(HistorialSchema) }, 400: errorResponses[400], 401: errorResponses[401], 404: errorResponses[404] },
+  });
+  apiV1.openapi(historyRoute, async (c: Ctx) => {
+    try {
+      return c.json({ success: true as const, data: await getHistorialVenta(getUsersDb(), c.req.param('id'), { id_own_project: c.get('id_own_project') }) }, 200);
+    } catch (err) {
+      return respondError(c, err);
+    }
+  });
 
   apiV1.openapi(listRoute, async (c: Ctx) => {
     const parsed = ListQuerySchema.safeParse(c.req.query());
