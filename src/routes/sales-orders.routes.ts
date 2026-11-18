@@ -7,6 +7,7 @@ import type { AuthVariables } from '../middlewares/auth.middleware';
 import type { OwnProjectVariables } from '../middlewares/require-own-project.middleware';
 import * as service from '../services/sales-orders.service';
 import { createQuickSale } from '../services/quick-sale.service';
+import { getDeliveryRoutes } from '../services/delivery-routes.service';
 import {
   ESTADOS,
   formatIssue,
@@ -336,6 +337,49 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
       ...errorResponses,
     },
   });
+
+  // Tarea 56: antes de /sales-orders/{id} para que "delivery-routes" no se tome como id.
+  const Coords = z.object({ lat: z.number(), lng: z.number() }).nullable();
+  const deliveryRoutesRoute = createRoute({
+    ...common,
+    method: 'get',
+    path: '/sales-orders/delivery-routes',
+    summary: 'Pedidos En camino con su destino, para armar la ruta de entrega',
+    description:
+      'Origen: la ubicación de la tienda (store_info). Paradas: los pedidos En camino (máximo 100). Los del marketplace traen el pin del cliente; los manuales, solo la dirección del cliente.',
+    responses: {
+      200: {
+        description: 'Origen y paradas',
+        ...json(
+          z.object({
+            success: z.literal(true),
+            data: z.object({
+              origen: z.object({ direccion: z.string().nullable(), ubicacion: Coords }),
+              paradas: z.array(
+                z.object({
+                  id_sales_order: z.string(),
+                  numero: z.string(),
+                  cliente: z.string(),
+                  telefono: z.string().nullable(),
+                  direccion: z.string().nullable(),
+                  detalle_direccion: z.string().nullable(),
+                  ciudad: z.string().nullable(),
+                  ubicacion: Coords,
+                  total: z.number(),
+                  condicion_pago: z.enum(['anticipado', 'contra_entrega']).nullable(),
+                  fecha_entrega: z.string().nullable(),
+                })
+              ),
+            }),
+          })
+        ),
+      },
+      401: errorResponses[401],
+    },
+  });
+  apiV1.openapi(deliveryRoutesRoute, async (c: Ctx) =>
+    c.json({ success: true as const, data: await getDeliveryRoutes(getUsersDb(), c.get('id_own_project')) }, 200)
+  );
 
   apiV1.openapi(listRoute, async (c: Ctx) => {
     const parsed = ListQuerySchema.safeParse(c.req.query());
