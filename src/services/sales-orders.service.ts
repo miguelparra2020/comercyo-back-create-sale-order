@@ -35,7 +35,9 @@ export type Transicion = keyof typeof TRANSICIONES;
 
 export type SalesOrderLineDto = {
   id_sales_order_line: string;
-  id_product: string;
+  // Tarea 12: una línea es de un producto o de un servicio (cobro de citas).
+  id_product: string | null;
+  id_service: string | null;
   producto_nombre: string;
   referencia: string;
   cantidad: number;
@@ -199,6 +201,8 @@ const LINE_COLUMNS = `
   id_sales_order::text AS id_sales_order,
   id_sales_order_line::text AS id_sales_order_line,
   id_product::text AS id_product,
+  -- to_jsonb: funciona antes y después de la migración que agrega id_service.
+  (to_jsonb(sales_order_lines) ->> 'id_service') AS id_service,
   producto_nombre,
   referencia,
   cantidad,
@@ -234,7 +238,8 @@ export const toDateOnly = (value: unknown): string => {
 
 export const toLineDto = (row: any): SalesOrderLineDto => ({
   id_sales_order_line: String(row.id_sales_order_line),
-  id_product: String(row.id_product),
+  id_product: row.id_product == null ? null : String(row.id_product),
+  id_service: row.id_service == null ? null : String(row.id_service),
   producto_nombre: row.producto_nombre,
   referencia: row.referencia,
   cantidad: Number(row.cantidad),

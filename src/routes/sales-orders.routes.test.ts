@@ -476,8 +476,8 @@ describe('serialización', () => {
       updated_at: '2026-10-17T20:30:00.000Z',
       factura: null,
       lineas: [
-        { id_sales_order_line: '456', id_product: '789', producto_nombre: 'Resma carta', referencia: 'RES-CARTA', cantidad: 2, precio_unitario: '18000.00', subtotal: '36000.00', costo_unitario: '12000.00' },
-        { id_sales_order_line: '457', id_product: '790', producto_nombre: 'Lapicero', referencia: 'LAP-01', cantidad: 1, precio_unitario: '15000.00', subtotal: '15000.00', costo_unitario: '9000.00' },
+        { id_sales_order_line: '456', id_product: '789', id_service: null, producto_nombre: 'Resma carta', referencia: 'RES-CARTA', cantidad: 2, precio_unitario: '18000.00', subtotal: '36000.00', costo_unitario: '12000.00' },
+        { id_sales_order_line: '457', id_product: '790', id_service: null, producto_nombre: 'Lapicero', referencia: 'LAP-01', cantidad: 1, precio_unitario: '15000.00', subtotal: '15000.00', costo_unitario: '9000.00' },
       ],
     });
   });
@@ -940,5 +940,16 @@ describe('ajustes: descuento, impuesto y envío', () => {
     for (const pattern of [P.page, P.detail, P.softDelete]) {
       for (const column of AJUSTES_SELECT) expect(db.find(pattern)!.sql).toContain(column);
     }
+  });
+});
+
+describe('GET /sales-orders/delivery-routes (tarea 56)', () => {
+  it('responde la ruta de la tienda (no se confunde con /sales-orders/{id})', async () => {
+    db.on(/FROM store_info/, { rows: [{ latitud: '4.8', longitud: '-75.7', direccion: 'Cra 7' }] });
+    db.on(/FROM sales_orders so\s+JOIN customers/, { rows: [] });
+    const res = await send(buildApp(), '/sales-orders/delivery-routes');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, data: { origen: { direccion: 'Cra 7', ubicacion: { lat: 4.8, lng: -75.7 } }, paradas: [] } });
+    expect(db.find(/FROM sales_orders so/)!.params).toEqual([ID_OWN_PROJECT]);
   });
 });
