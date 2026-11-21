@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import { escapeLike } from '../lib/like';
-import { orderNotFound } from '../lib/pv-errors';
+import { orderNotFound, SalesOrderError } from '../lib/pv-errors';
 import { withTransaction } from '../lib/transaction';
 import { findInvoiceId } from './sales-invoice-payments.service';
 import {
@@ -190,8 +190,10 @@ const FACTURA_COLUMNS = `
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)},
   coalesce(mo.condicion_pago, sx.condicion_pago) AS condicion_pago,
   CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, coalesce(mo.franja_entrega, dro.franja_entrega) AS franja_entrega,
-  CASE WHEN mo.medio_pago_nombre IS NOT NULL THEN mo.medio_pago_tipo ELSE dro.medio_pago_tipo END AS medio_pago_tipo,
-  coalesce(mo.medio_pago_nombre, dro.medio_pago_nombre) AS medio_pago_nombre,
+  CASE WHEN mo.medio_pago_nombre IS NOT NULL THEN mo.medio_pago_tipo
+       WHEN sx.medio_pago_nombre IS NOT NULL THEN sx.medio_pago_tipo
+       ELSE dro.medio_pago_tipo END AS medio_pago_tipo,
+  coalesce(mo.medio_pago_nombre, sx.medio_pago_nombre, dro.medio_pago_nombre) AS medio_pago_nombre,
   dsh.id_dropshipper::text AS dropshipper_id, dsh.nombre_tienda AS dropshipper_tienda, dsh.slug AS dropshipper_slug, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
   LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
@@ -434,11 +436,13 @@ const reread = async (client: Queryable, id: string, scope: Scope) => {
 // discount is only checked against the lines at COMMIT (deferred trigger).
 export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
   withTransaction(db, async (client) => {
+    const medio = input.id_medio_pago ? await resolveMedio(client, scope.id_own_project, input.id_medio_pago, input.condicion_pago ?? null) : null;
     const { rows } = await client.query(
       `INSERT INTO sales_orders
          (id_own_project, id_customer, fecha, fecha_entrega, notas, created_by_user_id,
-          descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio, condicion_pago)
-       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric, $12)
+          descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio, condicion_pago,
+          medio_pago_tipo, medio_pago_nombre)
+       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric, $12, $13, $14)
        RETURNING id_sales_order::text AS id_sales_order`,
       [
         scope.id_own_project,
@@ -449,13 +453,120 @@ export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
         scope.id_user,
         ...AJUSTES_COLUMNS.map((column) => input[column]),
         input.condicion_pago ?? null,
+        medio?.tipo ?? null,
+        medio?.nombre ?? null,
       ]
     );
     const id = rows[0].id_sales_order as string;
 
+    // Antes de las líneas: el trigger de Dropi congela costo, porcentaje y
+    // precio mínimo de cada línea (la ganancia sale de los precios del pedido).
+    if (input.dropshipper) await asociarDropshipper(client, scope, id, input, medio);
+
     await insertLines(client, id, input.lineas);
     return reread(client, id, scope);
   });
+
+// --------------------------------------------------------------------------
+// Medios de pago de la tienda y dropshippers (2026-11-21)
+// --------------------------------------------------------------------------
+
+export type MedioPagoTienda = { id: string; tipo: string; nombre: string; datos: string; contra_entrega: boolean; anticipado: boolean };
+export type DropshipperAsociable = { id: string; nombre_tienda: string; nombre_completo: string };
+
+// Lo que el formulario del pedido manual necesita: los medios de pago activos de
+// la tienda y, si es la tienda proveedora de Dropi, sus dropshippers aprobados
+// (sin datos de contacto ni de pago).
+export const getOrderOptions = async (
+  db: Db,
+  idOwnProject: number
+): Promise<{ medios: MedioPagoTienda[]; dropshippers: DropshipperAsociable[] }> => {
+  const [medios, dropshippers] = await Promise.all([
+    db.query(
+      `SELECT id_payment_method::text AS id, tipo, nombre, coalesce(datos, '') AS datos, contra_entrega, anticipado
+         FROM store_payment_methods
+        WHERE id_own_project = $1::bigint AND activo
+        ORDER BY orden, id_payment_method`,
+      [idOwnProject]
+    ),
+    db.query(
+      `SELECT id_dropshipper::text AS id, nombre_tienda, nombre_completo
+         FROM dropshippers
+        WHERE estado = 'aprobado' AND $1::bigint = dropi_proveedor()
+        ORDER BY lower(nombre_tienda), id_dropshipper`,
+      [idOwnProject]
+    ),
+  ]);
+  return { medios: medios.rows as MedioPagoTienda[], dropshippers: dropshippers.rows as DropshipperAsociable[] };
+};
+
+type MedioResuelto = { tipo: string; nombre: string; datos: string };
+
+// El medio debe ser de la tienda, estar activo y servir para la condición escogida.
+const resolveMedio = async (
+  client: Queryable,
+  idOwnProject: number,
+  idMedio: string,
+  condicion: 'anticipado' | 'contra_entrega' | null
+): Promise<MedioResuelto> => {
+  const { rows } = await client.query(
+    `SELECT tipo, nombre, coalesce(datos, '') AS datos, contra_entrega, anticipado
+       FROM store_payment_methods
+      WHERE id_payment_method = $1::bigint AND id_own_project = $2::bigint AND activo`,
+    [idMedio, idOwnProject]
+  );
+  const m = rows[0];
+  if (!m || (condicion === 'contra_entrega' && !m.contra_entrega) || (condicion === 'anticipado' && !m.anticipado)) {
+    throw new SalesOrderError(400, 'PV_MEDIO_PAGO_NO_DISPONIBLE', 'Ese medio de pago no está disponible para esa condición de pago');
+  }
+  return { tipo: String(m.tipo), nombre: String(m.nombre), datos: String(m.datos) };
+};
+
+// Celular con indicativo, como en Dropi: un celular colombiano de 10 dígitos
+// que empieza por 3 recibe el 57.
+const celularDropi = (telefono: string) => {
+  const d = telefono.replace(/\D/g, '');
+  return /^3[0-9]{9}$/.test(d) ? `57${d}` : d;
+};
+
+// La venta queda a nombre del dropshipper (dropi_orders, origen 'manual'). La BD
+// valida que esté aprobado y que la tienda sea la proveedora de Dropi.
+const asociarDropshipper = async (client: Queryable, scope: Scope, id: string, input: OrderBody, medio: MedioResuelto | null) => {
+  const ds = input.dropshipper!;
+  const { rows } = await client.query(
+    `SELECT nombre, telefono, direccion FROM customers WHERE id_customer = $1::bigint AND id_own_project = $2`,
+    [input.id_customer, scope.id_own_project]
+  );
+  const cliente = rows[0];
+  if (!cliente) throw new SalesOrderError(400, 'PV_CLIENTE_NO_ENCONTRADO', 'El cliente no existe');
+  const telefono = celularDropi(String(cliente.telefono ?? ''));
+  if (!/^[0-9]{10,15}$/.test(telefono)) {
+    throw new SalesOrderError(400, 'PV_CLIENTE_SIN_CELULAR', 'Para darle la venta a un dropshipper, el cliente necesita un celular válido');
+  }
+  const direccion = String(cliente.direccion ?? '').trim().slice(0, 200);
+  if (direccion.length < 5) {
+    throw new SalesOrderError(400, 'PV_CLIENTE_SIN_DIRECCION', 'Para darle la venta a un dropshipper, el cliente necesita una dirección');
+  }
+  const nombre = String(cliente.nombre ?? '').trim().slice(0, 120).padEnd(3, '.');
+  await client.query(
+    `INSERT INTO dropi_orders (id_sales_order, id_dropshipper, origen, cliente_nombre, cliente_telefono, direccion, id_city, notas,
+                               condicion_pago, medio_pago_tipo, medio_pago_nombre, medio_pago_datos)
+     VALUES ($1::bigint, $2::bigint, 'manual', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [
+      id,
+      ds.id_dropshipper,
+      nombre,
+      telefono,
+      direccion,
+      ds.id_city,
+      input.notas.slice(0, 500),
+      input.condicion_pago ?? null,
+      medio?.tipo ?? null,
+      medio?.nombre ?? null,
+      medio ? medio.datos.slice(0, 500) : null,
+    ]
+  );
+};
 
 // Header update -> drop all lines -> insert the new ones. The DB rejects each
 // step outside 'Pendiente'/'En preparación' (PV_PEDIDO_NO_EDITABLE), which
@@ -472,6 +583,16 @@ export const updateSalesOrder = (db: Db, scope: Scope, id: string, input: Update
     if (input.condicion_pago !== undefined) {
       values.push(input.condicion_pago);
       ajustes.push(`, condicion_pago = $${values.length}`);
+    }
+    if (input.id_medio_pago !== undefined) {
+      let condicion = input.condicion_pago;
+      if (condicion === undefined) {
+        const actual = await client.query(`SELECT condicion_pago FROM sales_orders WHERE id_sales_order = $1 AND id_own_project = $2`, [id, scope.id_own_project]);
+        condicion = actual.rows[0]?.condicion_pago ?? null;
+      }
+      const medio = input.id_medio_pago ? await resolveMedio(client, scope.id_own_project, input.id_medio_pago, condicion ?? null) : null;
+      values.push(medio?.tipo ?? null, medio?.nombre ?? null);
+      ajustes.push(`, medio_pago_tipo = $${values.length - 1}, medio_pago_nombre = $${values.length}`);
     }
     const n = values.length;
     const header = await client.query(

@@ -289,13 +289,38 @@ const condicionPago = z
   .nullable()
   .openapi({ description: "Pedidos manuales: 'anticipado', 'contra_entrega' o null (sin definir)." });
 
+// 2026-11-21: medio de pago de la tienda (store_payment_methods) con el que
+// paga el cliente. null = sin medio; omitido en el PUT = conserva el que tiene.
+const idMedioPago = z
+  .union([bigintId('Escoge el medio de pago', 'El medio de pago no es válido'), z.null()])
+  .optional()
+  .openapi({ type: 'integer', description: 'Medio de pago de la tienda (GET /sales-orders/options); null = sin medio.' });
+
+// 2026-11-21: la tienda proveedora de Dropi le da la venta a un dropshipper
+// aprobado. Solo al crear (la asociación no se cambia después).
+const DropshipperSchema = z
+  .object({
+    id_dropshipper: bigintId('Escoge el dropshipper', 'El dropshipper no es válido'),
+    id_city: z.coerce
+      .number({ error: 'Escoge la ciudad de entrega' })
+      .int('La ciudad no es válida')
+      .positive('La ciudad no es válida')
+      .openapi({ description: 'Ciudad de entrega del pedido' }),
+  })
+  .nullable()
+  .optional()
+  .openapi({ description: 'Solo la tienda proveedora de Dropi: asocia la venta a un dropshipper aprobado.' });
+
 export const OrderBodySchema = z
-  .object({ ...ORDER_FIELDS, ...AJUSTES_CREAR, condicion_pago: condicionPago.default(null) }, BODY_NOT_OBJECT)
+  .object(
+    { ...ORDER_FIELDS, ...AJUSTES_CREAR, condicion_pago: condicionPago.default(null), id_medio_pago: idMedioPago, dropshipper: DropshipperSchema },
+    BODY_NOT_OBJECT
+  )
   .superRefine(refineOrder);
 // PUT /sales-orders/:id
 export const UpdateOrderBodySchema = z
   // Omitida en el PUT: conserva la que tiene (un cliente viejo no la borra).
-  .object({ ...ORDER_FIELDS, ...AJUSTES_EDITAR, condicion_pago: condicionPago.optional() }, BODY_NOT_OBJECT)
+  .object({ ...ORDER_FIELDS, ...AJUSTES_EDITAR, condicion_pago: condicionPago.optional(), id_medio_pago: idMedioPago }, BODY_NOT_OBJECT)
   .superRefine(refineOrder);
 
 export type OrderBody = z.output<typeof OrderBodySchema>;

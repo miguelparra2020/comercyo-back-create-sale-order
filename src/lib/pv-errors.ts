@@ -47,6 +47,13 @@ export const sellerNotFound = () => new SalesOrderError(404, 'PV_VENDEDOR_NO_ENC
 // Every code raised by so_raise() in migrations 20261015031310_create_sales_orders
 // and 20261017034032_sales_orders_ajustes. Keep in sync with their headers.
 export const PV_ERROR_STATUS: Record<string, PvErrorStatus> = {
+  // Dropi (2026-11-21): pedido manual asociado a un dropshipper.
+  DR_DROPSHIPPER_NO_APROBADO: 409,
+  DR_PEDIDO_NO_ES_DEL_PROVEEDOR: 409,
+  DR_PRODUCTO_NO_DISPONIBLE: 400,
+  DR_PRECIO_MENOR_AL_MINIMO: 400,
+  DR_PRECIO_MENOR_A_BASE: 400,
+  DR_INMUTABLE: 409,
   // Ajustes (constraint trigger diferido: llega en el COMMIT)
   PV_DESCUENTO_EXCEDE_SUBTOTAL: 400,
   // Validación (datos enviados)
@@ -118,7 +125,7 @@ export const PV_ERROR_STATUS: Record<string, PvErrorStatus> = {
   FV_GASTO_INMUTABLE: 409,
 };
 
-const PV_MESSAGE_REGEX = /^((?:PV|FV)_[A-Z_]+):\s*([\s\S]*)$/;
+const PV_MESSAGE_REGEX = /^((?:PV|FV|DR)_[A-Z_]+):\s*([\s\S]*)$/;
 
 // so_raise() and fv_raise() build the message as '<CODIGO>: <texto en español>' and also
 // puts the code in DETAIL. The code is taken from DETAIL when present and the
