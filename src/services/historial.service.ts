@@ -27,6 +27,7 @@ const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : new Date(Stri
 const TEXTO_ESTADO: Record<string, string> = {
   Pendiente: 'Quedó en Pendiente',
   'En preparación': 'Pasó a En preparación (empacando)',
+  'Listo para despachar': 'Quedó listo para despachar (empacado)',
   'En camino': 'Salió: En camino',
   Entregado: 'Entregado al cliente',
   Cancelado: 'Pedido cancelado',

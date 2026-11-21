@@ -279,7 +279,7 @@ describe('ListQuerySchema', () => {
   });
 
   it.each([
-    [{ estado: 'Enviada' }, 'estado debe ser uno de: Pendiente, En preparación, En camino, Entregado, Cancelado'],
+    [{ estado: 'Enviada' }, 'estado debe ser uno de: Pendiente, En preparación, Listo para despachar, En camino, Entregado, Cancelado'],
     [{ id_customer: 'x' }, 'id_customer debe ser un entero positivo'],
     [{ atrasado: 'si' }, 'atrasado debe ser true o false'],
     [{ fecha_desde: '2026-02-30' }, 'fecha_desde debe tener el formato YYYY-MM-DD y ser válida'],

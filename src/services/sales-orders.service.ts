@@ -26,6 +26,7 @@ export type Scope = {
 // Target state of each action route (POST /sales-orders/:id/<action>).
 export const TRANSICIONES = {
   prepare: 'En preparación',
+  ready: 'Listo para despachar',
   ship: 'En camino',
   deliver: 'Entregado',
   cancel: 'Cancelado',
@@ -160,7 +161,7 @@ const orderColumns = (atrasado: string, origen: string) => `
 `;
 
 // Same definition as v_sales_orders.atrasado, for reads off the base table.
-const ATRASADO_EXPRESSION = `(so.estado IN ('Pendiente', 'En preparación', 'En camino') AND so.fecha_entrega < current_date)`;
+const ATRASADO_EXPRESSION = `(so.estado IN ('Pendiente', 'En preparación', 'Listo para despachar', 'En camino') AND so.fecha_entrega < current_date)`;
 
 // Factura vigente (no anulada) del pedido, desde v_sales_invoices: saldo,
 // estado (Pendiente / Vencida / Pagada) y dias_vencida ya vienen calculados
