@@ -95,6 +95,7 @@ describe('toOrderDto', () => {
       entrega: 'recoger',
       km_cobrados: null,
       franja_entrega: null,
+      dropshipper: null,
       entregado_en: '2026-10-17T20:30:00.000Z',
       created_at: '2026-10-15T15:00:00.000Z',
       updated_at: null,
@@ -113,6 +114,21 @@ describe('toOrderDto', () => {
         },
       ],
     });
+  });
+
+  it('pedido que entró por la tienda de un dropshipper: trae su tienda', () => {
+    const dto = toOrderDto(
+      {
+        id_sales_order: '237', id_own_project: '9', numero: 'PED-0079', id_customer: '5', cliente_nombre: 'Cliente',
+        fecha: '2026-11-20', fecha_entrega: '2026-11-22', notas: '', estado: 'En preparación',
+        descuento_tipo: null, descuento_valor: '0', impuesto_tipo: null, impuesto_valor: '0', costo_envio: '0',
+        subtotal: '50600', descuento_monto: '0', impuesto_monto: '0', total: '50600', atrasado: false,
+        origen: 'Marketplace', entregado_en: null, created_at: '2026-11-21T00:14:08Z', updated_at: null,
+        dropshipper_id: '13', dropshipper_tienda: 'Manu Market', dropshipper_slug: 'manu-market',
+      },
+      []
+    );
+    expect(dto.dropshipper).toEqual({ id: '13', nombre_tienda: 'Manu Market', slug: 'manu-market' });
   });
 
   it('un pedido sin ajustes: tipos null, valores y montos en 0, subtotal = total', () => {

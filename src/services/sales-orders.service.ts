@@ -115,6 +115,9 @@ export type SalesOrderDto = {
   km_cobrados: number | null;
   // Franja de entrega que escogió el cliente del marketplace (el día va en fecha_entrega).
   franja_entrega: 'manana' | 'tarde' | null;
+  // Tienda del dropshipper por la que entró el pedido (dropi_orders), o null si
+  // lo compraron directo en la tienda o se tomó a mano.
+  dropshipper: { id: string; nombre_tienda: string; slug: string | null } | null;
   entregado_en: string | null;
   created_at: string;
   updated_at: string | null;
@@ -182,9 +185,12 @@ const FACTURA_COLUMNS = `
 // que puso la tienda (sales_orders.condicion_pago, tarea 8; la vista no la trae).
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)},
   coalesce(mo.condicion_pago, sx.condicion_pago) AS condicion_pago,
-  CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, mo.franja_entrega, ${FACTURA_COLUMNS}
+  CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, mo.franja_entrega,
+  dsh.id_dropshipper::text AS dropshipper_id, dsh.nombre_tienda AS dropshipper_tienda, dsh.slug AS dropshipper_slug, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
   LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
+  LEFT JOIN dropi_orders dro ON dro.id_sales_order = so.id_sales_order
+  LEFT JOIN dropshippers dsh ON dsh.id_dropshipper = dro.id_dropshipper
   LEFT JOIN sales_orders sx ON sx.id_sales_order = so.id_sales_order
   LEFT JOIN v_sales_invoices vi ON vi.id_sales_order = so.id_sales_order AND vi.anulada_en IS NULL
   LEFT JOIN LATERAL (
@@ -295,6 +301,9 @@ export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto
   entrega: row.entrega === 'recoger' ? 'recoger' : row.entrega === 'domicilio' ? 'domicilio' : null,
   km_cobrados: row.km_cobrados === null || row.km_cobrados === undefined ? null : Number(row.km_cobrados),
   franja_entrega: row.franja_entrega === 'manana' || row.franja_entrega === 'tarde' ? row.franja_entrega : null,
+  dropshipper: row.dropshipper_id
+    ? { id: String(row.dropshipper_id), nombre_tienda: row.dropshipper_tienda ?? '', slug: row.dropshipper_slug ?? null }
+    : null,
   entregado_en: toIso(row.entregado_en),
   created_at: toIso(row.created_at),
   updated_at: toIso(row.updated_at),
