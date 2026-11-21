@@ -121,6 +121,10 @@ const SalesOrderSchema = z
     }),
     km_cobrados: z.number().nullable().openapi({ description: 'Kilómetros cobrados en el domicilio del marketplace' }),
     franja_entrega: z.enum(['manana', 'tarde']).nullable().openapi({ description: 'Franja de entrega escogida por el cliente (mañana 8–1, tarde 1–9); el día es fecha_entrega' }),
+    dropshipper: z
+      .object({ id: z.string(), nombre_tienda: z.string(), slug: z.string().nullable() })
+      .nullable()
+      .openapi({ description: 'Tienda del dropshipper por la que entró el pedido; null si se compró directo o se tomó a mano' }),
     entregado_en: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string().nullable(),
