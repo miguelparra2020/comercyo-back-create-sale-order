@@ -237,7 +237,7 @@ describe('validación del body (POST y PUT) -> 400 PV_VALIDACION sin tocar la BD
 // ===========================================================================
 describe('validación de la query de GET /sales-orders -> 400', () => {
   it.each([
-    ['estado=Enviada', 'estado debe ser uno de: Pendiente, En preparación, En camino, Entregado, Cancelado'],
+    ['estado=Enviada', 'estado debe ser uno de: Pendiente, En preparación, Listo para despachar, En camino, Entregado, Cancelado'],
     ['id_customer=x', 'id_customer debe ser un entero positivo'],
     ['atrasado=si', 'atrasado debe ser true o false'],
     ['origen=Dropi', 'origen debe ser Manual o Marketplace'],
@@ -955,3 +955,19 @@ describe('GET /sales-orders/delivery-routes (tarea 56)', () => {
     expect(db.find(/FROM sales_orders so/)!.params).toEqual([ID_OWN_PROJECT]);
   });
 });
+
+describe('POST /sales-orders/delivery-routes/dispatch (salir a ruta)', () => {
+  it('pasa a En camino los escogidos y responde cuáles salieron', async () => {
+    db.on(/SET estado = 'En camino'/, { rows: [{ id: '5' }] });
+    const res = await send(buildApp(), '/sales-orders/delivery-routes/dispatch', 'POST', { ids: ['5', '6'] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true, data: { despachados: ['5'] } });
+    expect(db.find(/SET estado = 'En camino'/)!.params).toEqual([ID_OWN_PROJECT, expect.anything(), ['5', '6']]);
+  });
+
+  it('sin pedidos o con ids raros responde 400', async () => {
+    expect((await send(buildApp(), '/sales-orders/delivery-routes/dispatch', 'POST', { ids: [] })).status).toBe(400);
+    expect((await send(buildApp(), '/sales-orders/delivery-routes/dispatch', 'POST', { ids: ['abc'] })).status).toBe(400);
+  });
+});
+

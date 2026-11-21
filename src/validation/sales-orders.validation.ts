@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi';
 
-export const ESTADOS = ['Pendiente', 'En preparación', 'En camino', 'Entregado', 'Cancelado'] as const;
+export const ESTADOS = ['Pendiente', 'En preparación', 'Listo para despachar', 'En camino', 'Entregado', 'Cancelado'] as const;
 export type Estado = (typeof ESTADOS)[number];
 
 export const MAX_LINEAS = 50;

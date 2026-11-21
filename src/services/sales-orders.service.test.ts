@@ -17,6 +17,7 @@ describe('TRANSICIONES', () => {
   it('cada acción lleva al estado de la máquina de estados (preparar/despachar/entregar/cancelar)', () => {
     expect(TRANSICIONES).toEqual({
       prepare: 'En preparación',
+      ready: 'Listo para despachar',
       ship: 'En camino',
       deliver: 'Entregado',
       cancel: 'Cancelado',

@@ -7,7 +7,7 @@ import type { AuthVariables } from '../middlewares/auth.middleware';
 import type { OwnProjectVariables } from '../middlewares/require-own-project.middleware';
 import * as service from '../services/sales-orders.service';
 import { createQuickSale } from '../services/quick-sale.service';
-import { getDeliveryRoutes } from '../services/delivery-routes.service';
+import { despacharRuta, getDeliveryRoutes, MAX_PARADAS } from '../services/delivery-routes.service';
 import { getHistorialVenta } from '../services/historial.service';
 import {
   ESTADOS,
@@ -221,9 +221,10 @@ const AJUSTES_DESCRIPTION = [
 
 const TRANSITION_SUMMARIES: Record<service.Transicion, string> = {
   prepare: 'Preparar: Pendiente -> En preparación',
-  ship: 'Despachar: En preparación -> En camino',
-  deliver: 'Entregar: En camino -> Entregado (la BD asigna entregado_en)',
-  cancel: 'Cancelar: Pendiente | En preparación | En camino -> Cancelado',
+  ready: 'Listo para despachar: En preparación -> Listo para despachar (empacado, espera ruta)',
+  ship: 'Despachar: En preparación | Listo para despachar -> En camino',
+  deliver: 'Entregar: Listo para despachar (lo recoge el cliente) | En camino -> Entregado (la BD asigna entregado_en)',
+  cancel: 'Cancelar: Pendiente | En preparación | Listo para despachar | En camino -> Cancelado',
 };
 
 export const registerSalesOrdersRoutes = (apiV1: any) => {
@@ -353,9 +354,9 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     ...common,
     method: 'get',
     path: '/sales-orders/delivery-routes',
-    summary: 'Pedidos En camino con su destino, para armar la ruta de entrega',
+    summary: 'Pedidos Listo para despachar y En camino con su destino, para armar la ruta de entrega',
     description:
-      'Origen: la ubicación de la tienda (store_info). Paradas: los pedidos En camino (máximo 100). Los del marketplace traen el pin del cliente; los manuales, solo la dirección del cliente.',
+      'Origen: la ubicación de la tienda (store_info). Paradas: los pedidos a domicilio Listo para despachar y En camino (máximo 100; los que el cliente recoge no van). Los del marketplace traen el pin del cliente; los manuales, solo la dirección del cliente.',
     responses: {
       200: {
         description: 'Origen y paradas',
@@ -377,6 +378,7 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
                   total: z.number(),
                   condicion_pago: z.enum(['anticipado', 'contra_entrega']).nullable(),
                   fecha_entrega: z.string().nullable(),
+                  estado: z.enum(['Listo para despachar', 'En camino']),
                 })
               ),
             }),
@@ -389,6 +391,51 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
   apiV1.openapi(deliveryRoutesRoute, async (c: Ctx) =>
     c.json({ success: true as const, data: await getDeliveryRoutes(getUsersDb(), c.get('id_own_project')) }, 200)
   );
+
+  // Sacar la ruta: los pedidos Listo para despachar de la ruta pasan a En camino.
+  const dispatchRoute = createRoute({
+    ...common,
+    method: 'post',
+    path: '/sales-orders/delivery-routes/dispatch',
+    summary: 'Salir a ruta: pasa a En camino los pedidos Listo para despachar escogidos',
+    description: 'Solo cambia los de la tienda que siguen en Listo para despachar; los demás se ignoran. Devuelve cuántos salieron.',
+    request: {
+      body: {
+        required: true,
+        ...json(
+          z.object({
+            ids: z
+              .array(z.string().regex(/^\d{1,18}$/, 'Pedido no válido'))
+              .min(1, 'Escoge al menos un pedido')
+              .max(MAX_PARADAS, `Máximo ${MAX_PARADAS} pedidos por ruta`),
+          })
+        ),
+      },
+    },
+    responses: {
+      200: {
+        description: 'Pedidos que salieron',
+        ...json(z.object({ success: z.literal(true), data: z.object({ despachados: z.array(z.string()) }) })),
+      },
+      400: errorResponses[400],
+      401: errorResponses[401],
+    },
+  });
+  apiV1.openapi(dispatchRoute, async (c: Ctx) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({ ids: z.array(z.string().regex(/^\d{1,18}$/)).min(1).max(MAX_PARADAS) })
+      .safeParse(body);
+    if (!parsed.success) {
+      return c.json({ success: false, error: 'Bad Request', code: 'PV_RUTA_INVALIDA', message: 'Escoge entre 1 y 100 pedidos de la ruta' }, 400);
+    }
+    try {
+      const despachados = await despacharRuta(getUsersDb(), scopeOf(c), parsed.data.ids);
+      return c.json({ success: true as const, data: { despachados } }, 200);
+    } catch (err) {
+      return respondError(c, err);
+    }
+  });
 
   // Tarea 57: historial del pedido (de lo primero a lo último).
   const HistorialSchema = z.object({

@@ -29,10 +29,12 @@ async function signToken(payload: Record<string, unknown>) {
 const SALES_ORDER_PATHS = [
   '/sales-orders/quick-sale',
   '/sales-orders/delivery-routes',
+  '/sales-orders/delivery-routes/dispatch',
   '/sales-orders/{id}/history',
   '/sales-orders',
   '/sales-orders/{id}',
   '/sales-orders/{id}/prepare',
+  '/sales-orders/{id}/ready',
   '/sales-orders/{id}/ship',
   '/sales-orders/{id}/deliver',
   '/sales-orders/{id}/cancel',
