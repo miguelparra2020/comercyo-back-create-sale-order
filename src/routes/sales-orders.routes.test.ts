@@ -471,6 +471,7 @@ describe('serialización', () => {
       entrega: null,
       km_cobrados: null,
       franja_entrega: null,
+      medio_pago: null,
       dropshipper: null,
       entregado_en: '2026-10-17T20:30:00.000Z',
       created_at: '2026-10-15T15:00:00.000Z',
