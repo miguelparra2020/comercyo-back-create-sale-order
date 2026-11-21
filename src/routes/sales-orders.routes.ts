@@ -392,6 +392,36 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     c.json({ success: true as const, data: await getDeliveryRoutes(getUsersDb(), c.get('id_own_project')) }, 200)
   );
 
+  // 2026-11-21: opciones del pedido manual (antes de /sales-orders/{id}).
+  const optionsRoute = createRoute({
+    ...common,
+    method: 'get',
+    path: '/sales-orders/options',
+    summary: 'Medios de pago de la tienda y dropshippers a los que se les puede dar la venta',
+    description:
+      'medios: los medios de pago activos de la tienda (store_payment_methods). dropshippers: solo en la tienda proveedora de Dropi, sus dropshippers aprobados (sin datos de contacto); en las demás, vacío.',
+    responses: {
+      200: {
+        description: 'Opciones',
+        ...json(
+          z.object({
+            success: z.literal(true),
+            data: z.object({
+              medios: z.array(
+                z.object({ id: z.string(), tipo: z.string(), nombre: z.string(), datos: z.string(), contra_entrega: z.boolean(), anticipado: z.boolean() })
+              ),
+              dropshippers: z.array(z.object({ id: z.string(), nombre_tienda: z.string(), nombre_completo: z.string() })),
+            }),
+          })
+        ),
+      },
+      401: errorResponses[401],
+    },
+  });
+  apiV1.openapi(optionsRoute, async (c: Ctx) =>
+    c.json({ success: true as const, data: await service.getOrderOptions(getUsersDb(), c.get('id_own_project')) }, 200)
+  );
+
   // Sacar la ruta: los pedidos Listo para despachar de la ruta pasan a En camino.
   const dispatchRoute = createRoute({
     ...common,

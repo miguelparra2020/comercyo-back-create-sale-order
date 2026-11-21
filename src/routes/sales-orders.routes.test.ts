@@ -275,7 +275,7 @@ describe('POST /sales-orders', () => {
     expect(insert.sql).toMatch(/created_by_user_id/);
     expect(insert.sql).toMatch(/RETURNING/);
     // sin ajustes en el body -> null / 0
-    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, null, 0, null, 0, 0, null]);
+    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, null, 0, null, 0, 0, null, null, null]);
     // id_product normalizado a string; sin precio -> null (la BD usa precio_venta_linea)
     expect(db.find(P.insertLines)!.params).toEqual([ORDER_ID, ['789', '790'], [2, 1], [18000, null]]);
     expect(db.find(P.insertLines)!.sql).toMatch(/WITH ORDINALITY[\s\S]*ORDER BY l\.ord/);
@@ -786,7 +786,7 @@ describe('ajustes: descuento, impuesto y envío', () => {
     expect(res.status).toBe(201);
     const insert = db.find(P.insertOrder)!;
     expect(insert.sql).toMatch(/descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio/);
-    expect(insert.params.slice(6)).toEqual(['porcentaje', 10, 'porcentaje', 19, 8000, null]);
+    expect(insert.params.slice(6)).toEqual(['porcentaje', 10, 'porcentaje', 19, 8000, null, null, null]);
     for (const call of writeSql()) {
       const columns = call.sql.split(/RETURNING|SELECT|WHERE/i)[0];
       expect(columns).not.toMatch(/\b(subtotal|descuento_monto|impuesto_monto|total)\b/);
@@ -806,8 +806,8 @@ describe('ajustes: descuento, impuesto y envío', () => {
   it('condición de pago (tarea 8): POST la guarda y PUT la cambia; omitida no se toca', async () => {
     happyDb(orderRow(AJUSTADO));
     await send(buildApp(), '/sales-orders', 'POST', validBody({ condicion_pago: 'anticipado' }));
-    expect(db.find(P.insertOrder)!.sql).toMatch(/costo_envio, condicion_pago\)/);
-    expect(db.find(P.insertOrder)!.params.at(-1)).toBe('anticipado');
+    expect(db.find(P.insertOrder)!.sql).toMatch(/costo_envio, condicion_pago,\s+medio_pago_tipo, medio_pago_nombre\)/);
+    expect(db.find(P.insertOrder)!.params.at(-3)).toBe('anticipado');
 
     happyDb(orderRow(AJUSTADO));
     await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({ condicion_pago: 'contra_entrega' }));
@@ -971,3 +971,90 @@ describe('POST /sales-orders/delivery-routes/dispatch (salir a ruta)', () => {
   });
 });
 
+
+describe('pedido manual: medio de pago de la tienda y dropshipper (2026-11-21)', () => {
+  const NEQUI = { tipo: 'billetera', nombre: 'Nequi', datos: '3001234567', contra_entrega: true, anticipado: true };
+  const EFECTIVO = { tipo: 'efectivo', nombre: 'Efectivo', datos: '', contra_entrega: true, anticipado: false };
+
+  it('GET /sales-orders/options trae los medios y los dropshippers (no se confunde con {id})', async () => {
+    db.on(/FROM store_payment_methods/, { rows: [{ id: '1', ...NEQUI }] });
+    db.on(/FROM dropshippers/, { rows: [{ id: '3', nombre_tienda: 'Manu Market', nombre_completo: 'Manuela' }] });
+    const res = await send(buildApp(), '/sales-orders/options');
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual({
+      medios: [{ id: '1', ...NEQUI }],
+      dropshippers: [{ id: '3', nombre_tienda: 'Manu Market', nombre_completo: 'Manuela' }],
+    });
+    expect(db.find(/FROM dropshippers/)!.sql).toMatch(/estado = 'aprobado' AND \$1::bigint = dropi_proveedor\(\)/);
+  });
+
+  it('POST guarda el medio de la tienda; uno que no sirve para la condición se rechaza', async () => {
+    happyDb(orderRow(AJUSTADO));
+    db.on(/FROM store_payment_methods/, { rows: [NEQUI] });
+    const ok = await send(buildApp(), '/sales-orders', 'POST', validBody({ condicion_pago: 'contra_entrega', id_medio_pago: 1 }));
+    expect(ok.status).toBe(201);
+    expect(db.find(/FROM store_payment_methods/)!.params).toEqual(['1', ID_OWN_PROJECT]);
+    expect(db.find(P.insertOrder)!.params.slice(-3)).toEqual(['contra_entrega', 'billetera', 'Nequi']);
+
+    Object.assign(db, createFakeDb());
+    happyDb(orderRow(AJUSTADO));
+    db.on(/FROM store_payment_methods/, { rows: [EFECTIVO] });
+    const mal = await send(buildApp(), '/sales-orders', 'POST', validBody({ condicion_pago: 'anticipado', id_medio_pago: 2 }));
+    expect(mal.status).toBe(400);
+    expect((await mal.json()).code).toBe('PV_MEDIO_PAGO_NO_DISPONIBLE');
+    expect(db.find(P.insertOrder)).toBeUndefined();
+  });
+
+  it('PUT cambia el medio (con la condición guardada) y omitido no lo toca', async () => {
+    happyDb(orderRow(AJUSTADO));
+    db.on(/SELECT condicion_pago FROM sales_orders/, { rows: [{ condicion_pago: 'contra_entrega' }] });
+    db.on(/FROM store_payment_methods/, { rows: [EFECTIVO] });
+    await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({ id_medio_pago: 2 }));
+    const update = db.find(P.updateHeader)!;
+    expect(update.sql).toMatch(/medio_pago_tipo = \$\d+, medio_pago_nombre = \$\d+/);
+    expect(update.params).toEqual(expect.arrayContaining(['efectivo', 'Efectivo']));
+
+    Object.assign(db, createFakeDb());
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({}));
+    expect(db.find(P.updateHeader)!.sql).not.toMatch(/medio_pago/);
+  });
+
+  it('POST con dropshipper crea su pedido Dropi (origen manual) antes de las líneas', async () => {
+    happyDb(orderRow(AJUSTADO));
+    db.on(/FROM store_payment_methods/, { rows: [NEQUI] });
+    db.on(/SELECT nombre, telefono, direccion FROM customers/, { rows: [{ nombre: 'Rosa Pérez', telefono: '310 444 5566', direccion: 'Cl 5 # 6-7' }] });
+    db.on(/INSERT INTO dropi_orders/, { rowCount: 1 });
+    const res = await send(
+      buildApp(),
+      '/sales-orders',
+      'POST',
+      validBody({ condicion_pago: 'contra_entrega', id_medio_pago: 1, dropshipper: { id_dropshipper: 3, id_city: 1 } })
+    );
+    expect(res.status).toBe(201);
+    const ins = db.find(/INSERT INTO dropi_orders/)!;
+    expect(ins.sql).toMatch(/'manual'/);
+    expect(ins.params).toEqual([ORDER_ID, '3', 'Rosa Pérez', '573104445566', 'Cl 5 # 6-7', 1, 'Entregar en portería', 'contra_entrega', 'billetera', 'Nequi', '3001234567']);
+    const orden = db.calls.map((c) => c.sql);
+    expect(orden.findIndex((s) => /INSERT INTO dropi_orders/.test(s))).toBeLessThan(orden.findIndex((s) => P.insertLines.test(s)));
+  });
+
+  it('sin celular válido no se le puede dar la venta a un dropshipper; los errores de Dropi llegan con su código', async () => {
+    happyDb(orderRow(AJUSTADO));
+    db.on(/SELECT nombre, telefono, direccion FROM customers/, { rows: [{ nombre: 'Rosa', telefono: '3214', direccion: 'Cl 5 # 6-7' }] });
+    const sinCel = await send(buildApp(), '/sales-orders', 'POST', validBody({ dropshipper: { id_dropshipper: 3, id_city: 1 } }));
+    expect(sinCel.status).toBe(400);
+    expect((await sinCel.json()).code).toBe('PV_CLIENTE_SIN_CELULAR');
+
+    Object.assign(db, createFakeDb());
+    happyDb(orderRow(AJUSTADO));
+    db.on(/SELECT nombre, telefono, direccion FROM customers/, { rows: [{ nombre: 'Rosa', telefono: '3104445566', direccion: 'Cl 5 # 6-7' }] });
+    db.on(/INSERT INTO dropi_orders/, () => {
+      // dr_raise() no pone detail: el código va en el mensaje.
+      throw Object.assign(new Error('DR_PEDIDO_NO_ES_DEL_PROVEEDOR: El pedido no es del proyecto proveedor de Dropi'), { code: 'P0001' });
+    });
+    const otra = await send(buildApp(), '/sales-orders', 'POST', validBody({ dropshipper: { id_dropshipper: 3, id_city: 1 } }));
+    expect(otra.status).toBe(409);
+    expect((await otra.json()).code).toBe('DR_PEDIDO_NO_ES_DEL_PROVEEDOR');
+  });
+});

@@ -108,9 +108,18 @@ const FV_MIGRATION_FILES = [
 const fvMigrationsPresent = FV_MIGRATION_FILES.every((f) => existsSync(f));
 
 describe('PV_ERROR_STATUS', () => {
+  // Dropi (comercyo-back-dropi): pedido manual asociado a un dropshipper.
+  const DR_CODES = [
+    'DR_DROPSHIPPER_NO_APROBADO',
+    'DR_PEDIDO_NO_ES_DEL_PROVEEDOR',
+    'DR_PRODUCTO_NO_DISPONIBLE',
+    'DR_PRECIO_MENOR_AL_MINIMO',
+    'DR_PRECIO_MENOR_A_BASE',
+    'DR_INMUTABLE',
+  ];
   it('cubre exactamente los códigos de las migraciones', () => {
     expect(Object.keys(PV_ERROR_STATUS).sort()).toEqual(
-      [...MIGRATION_CODES, ...FV_MIGRATION_CODES, ...FV_API_CODES].sort()
+      [...MIGRATION_CODES, ...FV_MIGRATION_CODES, ...FV_API_CODES, ...DR_CODES].sort()
     );
   });
 
