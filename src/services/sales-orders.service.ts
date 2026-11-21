@@ -189,7 +189,9 @@ const FACTURA_COLUMNS = `
 // que puso la tienda (sales_orders.condicion_pago, tarea 8; la vista no la trae).
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)},
   coalesce(mo.condicion_pago, sx.condicion_pago) AS condicion_pago,
-  CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, mo.franja_entrega, mo.medio_pago_tipo, mo.medio_pago_nombre,
+  CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, coalesce(mo.franja_entrega, dro.franja_entrega) AS franja_entrega,
+  CASE WHEN mo.medio_pago_nombre IS NOT NULL THEN mo.medio_pago_tipo ELSE dro.medio_pago_tipo END AS medio_pago_tipo,
+  coalesce(mo.medio_pago_nombre, dro.medio_pago_nombre) AS medio_pago_nombre,
   dsh.id_dropshipper::text AS dropshipper_id, dsh.nombre_tienda AS dropshipper_tienda, dsh.slug AS dropshipper_slug, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
   LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
