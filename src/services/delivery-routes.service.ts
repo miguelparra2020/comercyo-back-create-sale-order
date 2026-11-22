@@ -49,9 +49,10 @@ export const getDeliveryRoutes = async (db: Db, idTienda: number): Promise<Rutas
          FROM sales_orders so
          JOIN customers c ON c.id_customer = so.id_customer
          LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
+         LEFT JOIN dropi_orders dro ON dro.id_sales_order = so.id_sales_order
          LEFT JOIN cities ci ON ci.id_city = mo.id_city
         WHERE so.id_own_project = $1::bigint AND so.estado IN ('Listo para despachar', 'En camino') AND so.deleted_at IS NULL
-          AND coalesce(mo.entrega, 'domicilio') <> 'recoger'
+          AND coalesce(mo.entrega, dro.entrega, 'domicilio') <> 'recoger'
         ORDER BY so.fecha_entrega NULLS LAST, so.id_sales_order
         LIMIT ${MAX_PARADAS}`,
       [idTienda]

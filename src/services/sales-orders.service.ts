@@ -189,7 +189,8 @@ const FACTURA_COLUMNS = `
 // que puso la tienda (sales_orders.condicion_pago, tarea 8; la vista no la trae).
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)},
   coalesce(mo.condicion_pago, sx.condicion_pago) AS condicion_pago,
-  CASE WHEN mo.id_sales_order IS NULL THEN NULL ELSE coalesce(mo.entrega, 'domicilio') END AS entrega, mo.km_cobrados, coalesce(mo.franja_entrega, dro.franja_entrega) AS franja_entrega,
+  -- Marketplace: domicilio o recoger; Dropi del panel también (dro.entrega, 2026-11-22); manuales: null.
+  CASE WHEN mo.id_sales_order IS NOT NULL THEN coalesce(mo.entrega, 'domicilio') ELSE dro.entrega END AS entrega, mo.km_cobrados, coalesce(mo.franja_entrega, dro.franja_entrega) AS franja_entrega,
   CASE WHEN mo.medio_pago_nombre IS NOT NULL THEN mo.medio_pago_tipo
        WHEN sx.medio_pago_nombre IS NOT NULL THEN sx.medio_pago_tipo
        ELSE dro.medio_pago_tipo END AS medio_pago_tipo,
