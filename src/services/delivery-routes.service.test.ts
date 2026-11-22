@@ -23,7 +23,8 @@ describe('getDeliveryRoutes (tarea 56)', () => {
     ]);
     const sql = query.mock.calls.map((c) => c[0]).find((s) => s.includes('FROM sales_orders'))!;
     expect(sql).toContain("so.estado IN ('Listo para despachar', 'En camino')");
-    expect(sql).toContain("coalesce(mo.entrega, 'domicilio') <> 'recoger'");
+    // Ni los del marketplace ni los de Dropi que el cliente recoge.
+    expect(sql).toContain("coalesce(mo.entrega, dro.entrega, 'domicilio') <> 'recoger'");
     expect(sql).toContain('so.deleted_at IS NULL');
     expect(query).toHaveBeenCalledWith(expect.stringContaining('so.id_own_project = $1::bigint'), [9]);
   });
