@@ -83,10 +83,10 @@ apiV1.get('/doc', swaggerUI({ url: '/api/v1/openapi.json' }));
 // '/sales-orders' registration alongside it is NOT a no-op - it makes every
 // middleware below run twice per request to the bare path, so don't add one.
 //
-// requireOwnProject() reads the x-own-project-id header independently of
-// auth, so its order relative to requireAuth() doesn't matter - but it
-// runs after the rate limiter so an unauthenticated/unscoped flood is
-// still throttled before hitting the DB.
+// requireOwnProject() checks that the authenticated user owns the project in
+// x-own-project-id, so it must run after requireAuth() (it needs id_user) -
+// and after the rate limiter so an unauthenticated/unscoped flood is still
+// throttled before hitting the DB.
 apiV1.use('/sales-orders/*', rateLimiter({ windowMs: 60_000, max: 100 }));
 apiV1.use('/sales-orders/*', requireAuth());
 apiV1.use('/sales-orders/*', requireOwnProject());
