@@ -8,7 +8,10 @@ vi.mock('./config/db', () => ({
     if (!value) throw new Error(`Missing required environment variable: ${name}`);
     return value;
   },
-  getUsersDb: () => ({ query, connect: async () => ({ query, release: () => {} }) }),
+  getUsersDb: () => ({
+    // requireOwnProject: el usuario del token es dueño del proyecto.
+    query: (sql: string, params?: unknown[]) =>
+      sql.includes('FROM own_projects op') ? Promise.resolve({ rows: [{ ok: 1 }] }) : query(sql, params), connect: async () => ({ query, release: () => {} }) }),
 }));
 
 import app from './app';
