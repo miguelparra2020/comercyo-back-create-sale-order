@@ -9,9 +9,9 @@ vi.mock('./config/db', () => ({
     return value;
   },
   getUsersDb: () => ({
-    // requireOwnProject: el usuario del token es dueño del proyecto.
+    // requireOwnProject: el usuario del token es dueño del proyecto (permisos_en_proyecto).
     query: (sql: string, params?: unknown[]) =>
-      sql.includes('FROM own_projects op') ? Promise.resolve({ rows: [{ ok: 1 }] }) : query(sql, params), connect: async () => ({ query, release: () => {} }) }),
+      sql.includes('permisos_en_proyecto') ? Promise.resolve({ rows: [{ acceso: { duenio: true } }] }) : query(sql, params), connect: async () => ({ query, release: () => {} }) }),
 }));
 
 import app from './app';
