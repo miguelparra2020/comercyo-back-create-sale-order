@@ -1,7 +1,7 @@
 // Every error the API sends has the shape { success: false, error, message, code }:
 // `error` is the HTTP reason phrase, `message` is Spanish and safe to show to
 // the user, `code` is for the frontend.
-export type ErrorStatus = 400 | 401 | 404 | 409 | 429 | 500;
+export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 429 | 500;
 
 export type ErrorBody = {
   success: false;
@@ -13,6 +13,7 @@ export type ErrorBody = {
 const STATUS_TEXT: Record<ErrorStatus, string> = {
   400: 'Bad Request',
   401: 'Unauthorized',
+  403: 'Forbidden',
   404: 'Not Found',
   409: 'Conflict',
   429: 'Too Many Requests',
