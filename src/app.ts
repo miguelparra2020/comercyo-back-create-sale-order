@@ -11,6 +11,7 @@ import { registerSalesOrdersRoutes } from './routes/sales-orders.routes';
 import { registerSalesInvoicePaymentsRoutes } from './routes/sales-invoice-payments.routes';
 import { registerSalesReturnsRoutes } from './routes/sales-returns.routes';
 import { registerSalesExpensesRoutes } from './routes/sales-expenses.routes';
+import { registerDespachosRoutes } from './routes/despachos.routes';
 import { validationHook } from './lib/validation-hook';
 import { errorHandler } from './lib/error-handler';
 
@@ -95,7 +96,13 @@ apiV1.use('/sellers/*', rateLimiter({ windowMs: 60_000, max: 100 }));
 apiV1.use('/sellers/*', requireAuth());
 apiV1.use('/sellers/*', requireOwnProject());
 
+// Despachos: quién empaca y quién entrega cada pedido.
+apiV1.use('/despachos/*', rateLimiter({ windowMs: 60_000, max: 100 }));
+apiV1.use('/despachos/*', requireAuth());
+apiV1.use('/despachos/*', requireOwnProject());
+
 registerSalesOrdersRoutes(apiV1);
+registerDespachosRoutes(apiV1);
 registerSalesInvoicePaymentsRoutes(apiV1);
 registerSalesReturnsRoutes(apiV1);
 registerSalesExpensesRoutes(apiV1);

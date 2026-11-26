@@ -3,6 +3,10 @@ import type { Regla } from '../lib/permisos';
 // Qué permiso del equipo pide cada ruta de este backend (ver src/lib/permisos.ts).
 // La primera que coincide gana; una ruta sin regla es solo del dueño.
 export const REGLAS: readonly Regla[] = [
+  // Despachos: asignar es de quien gestiona; ver y marcar, de cualquiera con el
+  // módulo (el servicio limita a lo asignado a quien no gestiona).
+  { ruta: /\/despachos\/\d+\/asignar\/?$/, modulo: ['despachos', 'pedidos_venta'], accion: 'editar' },
+  { ruta: /\/despachos/, modulo: ['despachos', 'pedidos_venta', 'rutas_entrega'], accion: 'ver' },
   { ruta: /\/sales-orders\/quick-sale/, modulo: 'caja_rapida' },
   { ruta: /\/sales-orders\/delivery-routes/, metodos: ['GET'], modulo: 'rutas_entrega' },
   { ruta: /\/sales-orders\/delivery-routes/, modulo: 'rutas_entrega', accion: 'editar' },
