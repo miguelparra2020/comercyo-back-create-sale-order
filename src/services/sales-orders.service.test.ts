@@ -95,6 +95,8 @@ describe('toOrderDto', () => {
       atrasado: false,
       origen: 'Marketplace',
       condicion_pago: 'contra_entrega',
+      forma_pago: 'contado',
+      plazo_dias: null,
       entrega: 'recoger',
       km_cobrados: null,
       franja_entrega: null,

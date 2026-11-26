@@ -275,7 +275,7 @@ describe('POST /sales-orders', () => {
     expect(insert.sql).toMatch(/created_by_user_id/);
     expect(insert.sql).toMatch(/RETURNING/);
     // sin ajustes en el body -> null / 0
-    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, null, 0, null, 0, 0, null, null, null]);
+    expect(insert.params).toEqual([ID_OWN_PROJECT, '5', '2026-10-15', '2026-10-18', 'Entregar en portería', ID_USER, null, 0, null, 0, 0, null, null, null, 'contado', null]);
     // id_product normalizado a string; sin precio -> null (la BD usa precio_venta_linea)
     expect(db.find(P.insertLines)!.params).toEqual([ORDER_ID, ['789', '790'], [2, 1], [18000, null]]);
     expect(db.find(P.insertLines)!.sql).toMatch(/WITH ORDINALITY[\s\S]*ORDER BY l\.ord/);
@@ -468,6 +468,8 @@ describe('serialización', () => {
       atrasado: false,
       origen: 'Manual',
       condicion_pago: null,
+      forma_pago: 'contado',
+      plazo_dias: null,
       entrega: null,
       km_cobrados: null,
       franja_entrega: null,
@@ -786,7 +788,7 @@ describe('ajustes: descuento, impuesto y envío', () => {
     expect(res.status).toBe(201);
     const insert = db.find(P.insertOrder)!;
     expect(insert.sql).toMatch(/descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio/);
-    expect(insert.params.slice(6)).toEqual(['porcentaje', 10, 'porcentaje', 19, 8000, null, null, null]);
+    expect(insert.params.slice(6)).toEqual(['porcentaje', 10, 'porcentaje', 19, 8000, null, null, null, 'contado', null]);
     for (const call of writeSql()) {
       const columns = call.sql.split(/RETURNING|SELECT|WHERE/i)[0];
       expect(columns).not.toMatch(/\b(subtotal|descuento_monto|impuesto_monto|total)\b/);
@@ -806,8 +808,8 @@ describe('ajustes: descuento, impuesto y envío', () => {
   it('condición de pago (tarea 8): POST la guarda y PUT la cambia; omitida no se toca', async () => {
     happyDb(orderRow(AJUSTADO));
     await send(buildApp(), '/sales-orders', 'POST', validBody({ condicion_pago: 'anticipado' }));
-    expect(db.find(P.insertOrder)!.sql).toMatch(/costo_envio, condicion_pago,\s+medio_pago_tipo, medio_pago_nombre\)/);
-    expect(db.find(P.insertOrder)!.params.at(-3)).toBe('anticipado');
+    expect(db.find(P.insertOrder)!.sql).toMatch(/costo_envio, condicion_pago,\s+medio_pago_tipo, medio_pago_nombre, forma_pago, plazo_dias\)/);
+    expect(db.find(P.insertOrder)!.params.at(-5)).toBe('anticipado');
 
     happyDb(orderRow(AJUSTADO));
     await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({ condicion_pago: 'contra_entrega' }));
@@ -818,6 +820,30 @@ describe('ajustes: descuento, impuesto y envío', () => {
     happyDb(orderRow(AJUSTADO));
     await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({}));
     expect(db.calls.filter((c) => P.updateHeader.test(c.sql)).at(-1)!.sql).not.toMatch(/condicion_pago/);
+  });
+
+  it('contado o crédito (2026-11-25): crédito sin plazo toma 30 días, contado no lleva plazo; PUT omitido no se toca', async () => {
+    const ultima = (re: RegExp) => db.calls.filter((c) => re.test(c.sql)).at(-1)!;
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), '/sales-orders', 'POST', validBody({ forma_pago: 'credito' }));
+    expect(ultima(P.insertOrder).params.slice(-2)).toEqual(['credito', 30]);
+
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), '/sales-orders', 'POST', validBody({ forma_pago: 'contado', plazo_dias: 15 }));
+    expect(ultima(P.insertOrder).params.slice(-2)).toEqual(['contado', null]);
+
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({ forma_pago: 'credito', plazo_dias: 60 }));
+    const update = ultima(P.updateHeader);
+    expect(update.sql).toMatch(/forma_pago = \$\d+, plazo_dias = \$\d+::int/);
+    expect(update.params).toEqual(expect.arrayContaining(['credito', 60]));
+
+    happyDb(orderRow(AJUSTADO));
+    await send(buildApp(), `/sales-orders/${ORDER_ID}`, 'PUT', validBody({}));
+    expect(db.calls.filter((c) => P.updateHeader.test(c.sql)).at(-1)!.sql).not.toMatch(/forma_pago/);
+
+    const malo = await send(buildApp(), '/sales-orders', 'POST', validBody({ forma_pago: 'credito', plazo_dias: 400 }));
+    expect(malo.status).toBe(400);
   });
 
   it('PUT escribe los 5 campos en el UPDATE de la cabecera, antes de reemplazar las líneas', async () => {
@@ -994,7 +1020,7 @@ describe('pedido manual: medio de pago de la tienda y dropshipper (2026-11-21)',
     const ok = await send(buildApp(), '/sales-orders', 'POST', validBody({ condicion_pago: 'contra_entrega', id_medio_pago: 1 }));
     expect(ok.status).toBe(201);
     expect(db.find(/FROM store_payment_methods/)!.params).toEqual(['1', ID_OWN_PROJECT]);
-    expect(db.find(P.insertOrder)!.params.slice(-3)).toEqual(['contra_entrega', 'billetera', 'Nequi']);
+    expect(db.find(P.insertOrder)!.params.slice(-5, -2)).toEqual(['contra_entrega', 'billetera', 'Nequi']);
 
     Object.assign(db, createFakeDb());
     happyDb(orderRow(AJUSTADO));

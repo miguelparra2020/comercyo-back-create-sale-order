@@ -284,6 +284,20 @@ const refineOrder = (body: RefineInput, ctx: z.RefinementCtx) => {
 // POST /sales-orders
 // Tarea 8: condición de pago también en los pedidos manuales (en los del
 // marketplace la escoge el cliente y esa es la que se muestra).
+// Contado o crédito (Cartera solo ve los de crédito). Plazo en días, solo crédito.
+export const PLAZO_CREDITO_DEFECTO = 30;
+const formaPago = z
+  .enum(['contado', 'credito'], { error: "La forma de pago debe ser 'contado' o 'credito'" })
+  .openapi({ description: "Contado (la factura se paga al emitirla) o crédito (va a Cartera)." });
+const plazoDias = z
+  .number({ error: 'El plazo debe ser un número de días' })
+  .int('El plazo debe ser un número entero de días')
+  .min(1, 'El plazo es de 1 a 365 días')
+  .max(365, 'El plazo es de 1 a 365 días')
+  .nullable()
+  .optional()
+  .openapi({ description: 'Días de plazo del crédito (1–365). Se ignora si es de contado.' });
+
 const condicionPago = z
   .enum(['anticipado', 'contra_entrega'], { error: "La condición de pago debe ser 'anticipado' o 'contra_entrega'" })
   .nullable()
@@ -313,14 +327,17 @@ const DropshipperSchema = z
 
 export const OrderBodySchema = z
   .object(
-    { ...ORDER_FIELDS, ...AJUSTES_CREAR, condicion_pago: condicionPago.default(null), id_medio_pago: idMedioPago, dropshipper: DropshipperSchema },
+    { ...ORDER_FIELDS, ...AJUSTES_CREAR, condicion_pago: condicionPago.default(null), id_medio_pago: idMedioPago, dropshipper: DropshipperSchema,
+      forma_pago: formaPago.default('contado'), plazo_dias: plazoDias },
     BODY_NOT_OBJECT
   )
   .superRefine(refineOrder);
 // PUT /sales-orders/:id
 export const UpdateOrderBodySchema = z
   // Omitida en el PUT: conserva la que tiene (un cliente viejo no la borra).
-  .object({ ...ORDER_FIELDS, ...AJUSTES_EDITAR, condicion_pago: condicionPago.optional(), id_medio_pago: idMedioPago }, BODY_NOT_OBJECT)
+  .object({ ...ORDER_FIELDS, ...AJUSTES_EDITAR, condicion_pago: condicionPago.optional(), id_medio_pago: idMedioPago,
+    // Omitida: conserva la que tiene.
+    forma_pago: formaPago.optional(), plazo_dias: plazoDias }, BODY_NOT_OBJECT)
   .superRefine(refineOrder);
 
 export type OrderBody = z.output<typeof OrderBodySchema>;
