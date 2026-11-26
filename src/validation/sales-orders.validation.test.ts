@@ -60,6 +60,7 @@ describe('OrderBodySchema', () => {
       impuesto_valor: 0,
       costo_envio: 0,
       condicion_pago: null,
+      forma_pago: 'contado',
     });
   });
 
@@ -83,6 +84,7 @@ describe('OrderBodySchema', () => {
       'descuento_valor',
       'fecha',
       'fecha_entrega',
+      'forma_pago',
       'id_customer',
       'impuesto_tipo',
       'impuesto_valor',

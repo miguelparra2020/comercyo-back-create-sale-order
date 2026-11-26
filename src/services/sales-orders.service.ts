@@ -13,6 +13,7 @@ import {
   type OrderLineInput,
   type TipoAjuste,
   type UpdateOrderBody,
+  PLAZO_CREDITO_DEFECTO,
 } from '../validation/sales-orders.validation';
 
 type Db = Pick<Pool, 'query' | 'connect'>;
@@ -110,6 +111,9 @@ export type SalesOrderDto = {
   origen: OrigenPedido;
   // Condición de pago que eligió el cliente en el marketplace (null en los manuales y en los de antes).
   condicion_pago: 'anticipado' | 'contra_entrega' | null;
+  // Contado o crédito (Cartera solo ve los de crédito) y días de plazo del crédito.
+  forma_pago: 'contado' | 'credito';
+  plazo_dias: number | null;
   // Pedidos del marketplace: domicilio o recoger en la tienda (null en los manuales).
   entrega: 'domicilio' | 'recoger' | null;
   // Kilómetros cobrados en el domicilio del marketplace (null si no hubo kilometraje).
@@ -189,6 +193,7 @@ const FACTURA_COLUMNS = `
 // que puso la tienda (sales_orders.condicion_pago, tarea 8; la vista no la trae).
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)},
   coalesce(mo.condicion_pago, sx.condicion_pago) AS condicion_pago,
+  sx.forma_pago, sx.plazo_dias,
   -- Marketplace: domicilio o recoger; Dropi del panel también (dro.entrega, 2026-11-22); manuales: null.
   CASE WHEN mo.id_sales_order IS NOT NULL THEN coalesce(mo.entrega, 'domicilio') ELSE dro.entrega END AS entrega, mo.km_cobrados, coalesce(mo.franja_entrega, dro.franja_entrega) AS franja_entrega,
   CASE WHEN mo.medio_pago_nombre IS NOT NULL THEN mo.medio_pago_tipo
@@ -307,6 +312,8 @@ export const toOrderDto = (row: any, lineas: SalesOrderLineDto[]): SalesOrderDto
   atrasado: row.atrasado === true,
   origen: row.origen === 'Marketplace' ? 'Marketplace' : 'Manual',
   condicion_pago: row.condicion_pago === 'anticipado' || row.condicion_pago === 'contra_entrega' ? row.condicion_pago : null,
+  forma_pago: row.forma_pago === 'credito' ? 'credito' : 'contado',
+  plazo_dias: row.forma_pago === 'credito' && row.plazo_dias != null ? Number(row.plazo_dias) : null,
   entrega: row.entrega === 'recoger' ? 'recoger' : row.entrega === 'domicilio' ? 'domicilio' : null,
   km_cobrados: row.km_cobrados === null || row.km_cobrados === undefined ? null : Number(row.km_cobrados),
   franja_entrega: row.franja_entrega === 'manana' || row.franja_entrega === 'tarde' ? row.franja_entrega : null,
@@ -430,6 +437,10 @@ const reread = async (client: Queryable, id: string, scope: Scope) => {
   return order;
 };
 
+// Contado no lleva plazo; crédito sin plazo toma el de por defecto (30 días).
+export const plazoDe = (forma: 'contado' | 'credito', plazo: number | null | undefined): number | null =>
+  forma === 'credito' ? (plazo ?? PLAZO_CREDITO_DEFECTO) : null;
+
 // The DB forces new orders into 'Pendiente' and fills numero, cliente_nombre
 // and the line snapshots. All three steps share one transaction.
 // subtotal/descuento_monto/impuesto_monto/total are never written: the
@@ -442,8 +453,8 @@ export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
       `INSERT INTO sales_orders
          (id_own_project, id_customer, fecha, fecha_entrega, notas, created_by_user_id,
           descuento_tipo, descuento_valor, impuesto_tipo, impuesto_valor, costo_envio, condicion_pago,
-          medio_pago_tipo, medio_pago_nombre)
-       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric, $12, $13, $14)
+          medio_pago_tipo, medio_pago_nombre, forma_pago, plazo_dias)
+       VALUES ($1, $2::bigint, $3::date, $4::date, $5, $6, $7, $8::numeric, $9, $10::numeric, $11::numeric, $12, $13, $14, $15, $16)
        RETURNING id_sales_order::text AS id_sales_order`,
       [
         scope.id_own_project,
@@ -456,6 +467,8 @@ export const createSalesOrder = (db: Db, scope: Scope, input: OrderBody) =>
         input.condicion_pago ?? null,
         medio?.tipo ?? null,
         medio?.nombre ?? null,
+        input.forma_pago,
+        plazoDe(input.forma_pago, input.plazo_dias),
       ]
     );
     const id = rows[0].id_sales_order as string;
@@ -584,6 +597,10 @@ export const updateSalesOrder = (db: Db, scope: Scope, id: string, input: Update
     if (input.condicion_pago !== undefined) {
       values.push(input.condicion_pago);
       ajustes.push(`, condicion_pago = $${values.length}`);
+    }
+    if (input.forma_pago !== undefined) {
+      values.push(input.forma_pago, plazoDe(input.forma_pago, input.plazo_dias));
+      ajustes.push(`, forma_pago = $${values.length - 1}, plazo_dias = $${values.length}::int`);
     }
     if (input.id_medio_pago !== undefined) {
       let condicion = input.condicion_pago;

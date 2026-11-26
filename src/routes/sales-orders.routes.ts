@@ -116,6 +116,8 @@ const SalesOrderSchema = z
     condicion_pago: z.enum(['anticipado', 'contra_entrega']).nullable().openapi({
       description: 'Pago anticipado o contra entrega: en el marketplace lo elige el cliente; en los manuales lo pone la tienda. null si no se definió.',
     }),
+    forma_pago: z.enum(['contado', 'credito']).openapi({ description: 'Contado o crédito. Cartera solo muestra las facturas de pedidos a crédito.' }),
+    plazo_dias: z.number().nullable().openapi({ description: 'Días de plazo del crédito; null si es de contado.' }),
     entrega: z.enum(['domicilio', 'recoger']).nullable().openapi({
       description: 'Pedidos del marketplace: domicilio o el cliente recoge en la tienda. null en los manuales.',
     }),
