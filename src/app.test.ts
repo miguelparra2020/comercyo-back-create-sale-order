@@ -30,6 +30,10 @@ async function signToken(payload: Record<string, unknown>) {
 }
 
 const SALES_ORDER_PATHS = [
+  '/despachos',
+  '/despachos/personas',
+  '/despachos/{id}/asignar',
+  '/despachos/{id}/{paso}',
   '/sales-orders/quick-sale',
   '/sales-orders/delivery-routes',
   '/sales-orders/options',
@@ -252,5 +256,12 @@ describe('app wiring', () => {
       expect(last!.status).toBe(429);
       expect((await last!.json()).code).toBe('RATE_LIMITED');
     });
+  });
+});
+
+describe('/despachos wiring', () => {
+  it('pide sesión', async () => {
+    expect((await app.request('/api/v1/despachos')).status).toBe(401);
+    expect((await app.request('/api/v1/despachos/1/entregar', { method: 'POST' })).status).toBe(401);
   });
 });
