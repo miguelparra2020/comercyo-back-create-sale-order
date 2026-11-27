@@ -20,6 +20,7 @@ import {
   OrderBodySchema,
   TIPOS_AJUSTE,
   UpdateOrderBodySchema,
+  CambiarPagoBodySchema,
   QuickSaleBodySchema,
 } from '../validation/sales-orders.validation';
 
@@ -282,6 +283,18 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
       '\n\nPUT: un ajuste que no venga conserva el valor actual del pedido. Cambiar un ajuste fuera de ' +
       "'Pendiente'/'En preparación' -> 409 PV_PEDIDO_NO_EDITABLE.",
     request: { params: IdParamSchema, body: { ...json(UpdateOrderBodySchema), required: true } },
+    responses: {
+      200: { description: 'Pedido actualizado', ...json(SalesOrderResponseSchema) },
+      ...errorResponses,
+    },
+  });
+
+  const cambiarPagoRoute = createRoute({
+    ...common,
+    method: 'patch',
+    path: '/sales-orders/{id}/pago',
+    summary: 'Cambiar la condición y el medio de pago (en cualquier estado, también del marketplace)',
+    request: { params: IdParamSchema, body: { ...json(CambiarPagoBodySchema), required: true } },
     responses: {
       200: { description: 'Pedido actualizado', ...json(SalesOrderResponseSchema) },
       ...errorResponses,
@@ -563,6 +576,17 @@ export const registerSalesOrdersRoutes = (apiV1: any) => {
     if (response) return response;
     try {
       const data = await service.updateSalesOrder(getUsersDb(), scopeOf(c), c.req.param('id'), input);
+      return c.json({ success: true, data }, 200);
+    } catch (err) {
+      return respondError(c, err);
+    }
+  });
+
+  apiV1.openapi(cambiarPagoRoute, async (c: Ctx) => {
+    const { input, response } = await parseOrderBody(c, CambiarPagoBodySchema);
+    if (response) return response;
+    try {
+      const data = await service.cambiarPagoPedido(getUsersDb(), scopeOf(c), c.req.param('id'), { condicion_pago: input.condicion_pago ?? null, id_medio_pago: input.id_medio_pago ?? null });
       return c.json({ success: true, data }, 200);
     } catch (err) {
       return respondError(c, err);

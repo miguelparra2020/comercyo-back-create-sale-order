@@ -173,6 +173,29 @@ describe('validación del body (POST y PUT) -> 400 PV_VALIDACION sin tocar la BD
     expect(db.calls).toHaveLength(0);
   });
 
+  it('PATCH /pago cambia condición y medio aunque el pedido sea del marketplace y esté entregado', async () => {
+    happyDb(orderRow({ estado: 'Entregado', origen: 'Marketplace' }))
+      .on(/FROM store_payment_methods/, { rows: [{ tipo: 'transferencia', nombre: 'Bancolombia ahorros', datos: '', contra_entrega: true, anticipado: true }] })
+      .on(/UPDATE sales_orders SET condicion_pago/, { rowCount: 1 });
+    const res = await send(buildApp(), `/sales-orders/${ORDER_ID}/pago`, 'PATCH', { condicion_pago: 'contra_entrega', id_medio_pago: '4' });
+    expect(res.status).toBe(200);
+    const upd = db.find(/UPDATE sales_orders SET condicion_pago/)!;
+    expect(upd.params).toEqual(['contra_entrega', 'transferencia', 'Bancolombia ahorros', ID_USER, ORDER_ID, ID_OWN_PROJECT]);
+    expect(upd.sql).toMatch(/estado <> 'Cancelado'/);
+    expect(db.statements()).toContain('COMMIT');
+  });
+
+  it('PATCH /pago: medio que no sirve para la condición -> 400; pedido cancelado o ajeno -> 404', async () => {
+    happyDb().on(/FROM store_payment_methods/, { rows: [{ tipo: 'efectivo', nombre: 'Efectivo', datos: '', contra_entrega: true, anticipado: false }] });
+    const r1 = await send(buildApp(), `/sales-orders/${ORDER_ID}/pago`, 'PATCH', { condicion_pago: 'anticipado', id_medio_pago: '4' });
+    expect(r1.status).toBe(400);
+    expect(JSON.stringify(await r1.json())).toContain('PV_MEDIO_PAGO_NO_DISPONIBLE');
+    db.reset();
+    happyDb().on(/UPDATE sales_orders SET condicion_pago/, { rowCount: 0 });
+    const r2 = await send(buildApp(), `/sales-orders/${ORDER_ID}/pago`, 'PATCH', { condicion_pago: null, id_medio_pago: null });
+    expect(r2.status).toBe(404);
+  });
+
   it('rechaza un body que no es JSON', async () => {
     const res = await send(buildApp(), '/sales-orders', 'POST', '{no es json');
     expect(res.status).toBe(400);

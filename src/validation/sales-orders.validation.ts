@@ -902,3 +902,10 @@ export const QuickSaleBodySchema = z
   .openapi('QuickSaleBody');
 
 export type QuickSaleBody = z.output<typeof QuickSaleBodySchema>;
+
+// Cambiar cómo pagó el cliente (condición y medio) en cualquier estado, también
+// en pedidos del marketplace o ya facturados: no toca líneas ni totales.
+export const CambiarPagoBodySchema = z
+  .object({ condicion_pago: condicionPago, id_medio_pago: z.union([bigintId('Escoge el medio de pago', 'El medio de pago no es válido'), z.null()]) })
+  .openapi('CambiarPagoPedido');
+export type CambiarPagoBody = z.infer<typeof CambiarPagoBodySchema>;

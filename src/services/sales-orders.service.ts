@@ -192,14 +192,15 @@ const FACTURA_COLUMNS = `
 // Condición de pago: la del cliente en el marketplace o, en los manuales, la
 // que puso la tienda (sales_orders.condicion_pago, tarea 8; la vista no la trae).
 const SELECT_ORDER_FROM_VIEW = `SELECT ${orderColumns('so.atrasado', ORIGEN_JOINED)},
-  coalesce(mo.condicion_pago, sx.condicion_pago) AS condicion_pago,
+  -- Lo que la tienda corrigió en el pedido (sx) manda sobre lo que eligió el cliente (mo).
+  coalesce(sx.condicion_pago, mo.condicion_pago) AS condicion_pago,
   sx.forma_pago, sx.plazo_dias,
   -- Marketplace: domicilio o recoger; Dropi del panel también (dro.entrega, 2026-11-22); manuales: null.
   CASE WHEN mo.id_sales_order IS NOT NULL THEN coalesce(mo.entrega, 'domicilio') ELSE dro.entrega END AS entrega, mo.km_cobrados, coalesce(mo.franja_entrega, dro.franja_entrega) AS franja_entrega,
-  CASE WHEN mo.medio_pago_nombre IS NOT NULL THEN mo.medio_pago_tipo
-       WHEN sx.medio_pago_nombre IS NOT NULL THEN sx.medio_pago_tipo
+  CASE WHEN sx.medio_pago_nombre IS NOT NULL THEN sx.medio_pago_tipo
+       WHEN mo.medio_pago_nombre IS NOT NULL THEN mo.medio_pago_tipo
        ELSE dro.medio_pago_tipo END AS medio_pago_tipo,
-  coalesce(mo.medio_pago_nombre, sx.medio_pago_nombre, dro.medio_pago_nombre) AS medio_pago_nombre,
+  coalesce(sx.medio_pago_nombre, mo.medio_pago_nombre, dro.medio_pago_nombre) AS medio_pago_nombre,
   dsh.id_dropshipper::text AS dropshipper_id, dsh.nombre_tienda AS dropshipper_tienda, dsh.slug AS dropshipper_slug, ${FACTURA_COLUMNS}
   FROM v_sales_orders so
   LEFT JOIN marketplace_orders mo ON mo.id_sales_order = so.id_sales_order
@@ -581,6 +582,25 @@ const asociarDropshipper = async (client: Queryable, scope: Scope, id: string, i
     ]
   );
 };
+
+// Cómo pagó el cliente: se corrige en cualquier estado (salvo cancelado o
+// eliminado), también si vino del marketplace o ya está facturado. Los triggers
+// de la base no lo bloquean porque no cambia cabecera, líneas ni totales.
+export const cambiarPagoPedido = (
+  db: Db,
+  scope: Scope,
+  id: string,
+  input: { condicion_pago: 'anticipado' | 'contra_entrega' | null; id_medio_pago: string | null }
+) =>
+  withTransaction(db, async (client) => {
+    const medio = input.id_medio_pago ? await resolveMedio(client, scope.id_own_project, input.id_medio_pago, input.condicion_pago) : null;
+    const r = await client.query(
+      `UPDATE sales_orders SET condicion_pago = $1, medio_pago_tipo = $2, medio_pago_nombre = $3, updated_by_user_id = $4
+        WHERE id_sales_order = $5 AND id_own_project = $6 AND deleted_at IS NULL AND estado <> 'Cancelado'`,
+      [input.condicion_pago, medio?.tipo ?? null, medio?.nombre ?? null, scope.id_user, id, scope.id_own_project]
+    );
+    if (!r.rowCount) throw orderNotFound();
+  }).then(() => getSalesOrder(db, id, scope.id_own_project));
 
 // Header update -> drop all lines -> insert the new ones. The DB rejects each
 // step outside 'Pendiente'/'En preparación' (PV_PEDIDO_NO_EDITABLE), which

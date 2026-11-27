@@ -46,6 +46,7 @@ const SALES_ORDER_PATHS = [
   '/sales-orders/{id}/ship',
   '/sales-orders/{id}/deliver',
   '/sales-orders/{id}/cancel',
+  '/sales-orders/{id}/pago',
   '/sales-orders/{id}/invoice',
   '/sales-orders/{id}/payments',
   '/sales-orders/{id}/payments/{idPago}/void',
